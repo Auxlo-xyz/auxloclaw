@@ -72,6 +72,10 @@ async fn main() -> anyhow::Result<()> {
         Commands::Run { skill, args: run_args } => {
             commands::run::handle_run(skill, run_args).await?;
         }
+        
+        Commands::Stop => {
+            commands::stop::handle_stop()?;
+        }
     }
     
     Ok(())

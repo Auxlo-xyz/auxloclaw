@@ -75,6 +75,8 @@ pub enum Commands {
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
     },
+    /// Stop the gateway server
+    Stop,
 }
 
 #[derive(Subcommand)]
