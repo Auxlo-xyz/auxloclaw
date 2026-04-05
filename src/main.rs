@@ -154,7 +154,7 @@ async fn chat_handler(
     axum::extract::State(agent): axum::extract::State<Arc<agent::AgentCore>>,
     axum::Json(req): axum::Json<ChatRequest>,
 ) -> axum::Json<ChatResponse> {
-    let response = agent.process(&req.message).await;
+    let response = agent.process(&req.message, None).await;
     axum::Json(ChatResponse { response })
 }
 

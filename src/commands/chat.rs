@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 pub async fn handle_chat(
     message: Option<String>,
-    model: Option<String>,
-    stream: bool,
+    _model: Option<String>,
+    _stream: bool,
 ) -> Result<()> {
     // Load config
     let config_path = dirs::home_dir()
@@ -23,12 +23,12 @@ pub async fn handle_chat(
     
     match message {
         Some(msg) => {
-            // One-shot mode
-            let response = agent.process(&msg).await;
+            // One-shot mode (no history)
+            let response = agent.process(&msg, None).await;
             println!("{}", response);
         }
         None => {
-            // Interactive mode
+            // Interactive mode with history
             println!("\n🦞 AUXLOCLAW Chat (type 'exit' to quit, 'help' for commands)\n");
             
             let mut history = dialoguer::BasicHistory::new();
@@ -50,12 +50,13 @@ pub async fn handle_chat(
                         println!("  help, ?        - Show this help");
                         println!("  clear          - Clear history");
                         println!("  status         - Show session status");
-                        println!("  skill <name>   - Activate a skill");
                         println!();
                         continue;
                     }
                     "clear" => {
                         history = dialoguer::BasicHistory::new();
+                        // Also clear agent session
+                        let _ = agent.clear_session("cli:default").await;
                         println!("History cleared.");
                         continue;
                     }
@@ -69,8 +70,8 @@ pub async fn handle_chat(
                     _ => {}
                 }
                 
-                // Process message
-                let response = agent.process(&input).await;
+                // Process message with CLI session (history enabled)
+                let response = agent.process(&input, None).await;
                 println!("\n{}\n", response);
             }
         }

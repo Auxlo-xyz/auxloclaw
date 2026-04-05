@@ -2,6 +2,8 @@
 
 use anyhow::Result;
 use std::sync::Arc;
+use std::collections::HashMap;
+use tokio::sync::RwLock;
 
 use crate::config::AppConfig;
 use crate::memory::{MemoryEngine, SessionHistory};
@@ -9,7 +11,6 @@ use crate::orchestrator::ToolOrchestrator;
 use crate::providers::{CompletionRequest, Message, ProviderPool};
 use crate::streaming::StreamSession;
 use crate::persona::PersonaConfig;
-use crate::skills::SkillRegistry;
 
 /// Usage statistics
 #[derive(Debug, Clone, Default)]
@@ -32,6 +33,8 @@ pub struct AgentCore {
     orchestrator: Arc<ToolOrchestrator>,
     persona: PersonaConfig,
     usage: std::sync::atomic::AtomicU64,
+    /// Session histories per chat (50 message rolling window)
+    sessions: RwLock<HashMap<String, SessionHistory>>,
 }
 
 impl AgentCore {
@@ -49,15 +52,25 @@ impl AgentCore {
             orchestrator,
             persona,
             usage: std::sync::atomic::AtomicU64::new(0),
+            sessions: RwLock::new(HashMap::new()),
         }
     }
 
-    /// Process a message
-    pub async fn process(&self, message: &str) -> String {
-        let request = self.build_request(message).await;
+    /// Process a message with optional session ID for history tracking
+    pub async fn process(&self, message: &str, session_id: Option<i64>) -> String {
+        let session_key = session_id
+            .map(|id| format!("tg:{}", id))
+            .unwrap_or_else(|| "default".to_string());
+        
+        // Build request with history
+        let request = self.build_request_with_history(message, &session_key).await;
         
         match self.providers.complete(request).await {
             Ok(response) => {
+                // Store in session history
+                self.add_to_history(&session_key, "user", message).await;
+                self.add_to_history(&session_key, "assistant", &response.content).await;
+                
                 // Update usage
                 if let Some(usage) = response.usage {
                     self.usage.fetch_add(usage.total_tokens as u64, std::sync::atomic::Ordering::Relaxed);
@@ -68,20 +81,36 @@ impl AgentCore {
         }
     }
 
-    /// Process with streaming
-    pub async fn process_stream(&self, message: &str) -> StreamSession {
-        let request = self.build_request(message).await;
-        let _ = request;
+    async fn add_to_history(&self, session_key: &str, role: &str, content: &str) {
+        let mut sessions = self.sessions.write().await;
+        let session = sessions
+            .entry(session_key.to_string())
+            .or_insert_with(|| SessionHistory::new(session_key));
         
-        let (session, _rx) = StreamSession::new(
-            uuid(),
-            100,
-        );
-        session
+        session.add_message(role, content, None);
+        
+        // Keep only last 50 messages (rolling window)
+        if session.messages.len() > 50 {
+            let remove_count = session.messages.len() - 50;
+            session.messages.drain(0..remove_count);
+        }
     }
 
-    async fn build_request(&self, message: &str) -> CompletionRequest {
+    async fn build_request_with_history(&self, message: &str, session_key: &str) -> CompletionRequest {
         let system_prompt = self.build_system_prompt();
+        
+        // Get session history
+        let sessions = self.sessions.read().await;
+        let history_messages = if let Some(session) = sessions.get(session_key) {
+            session.messages.iter().map(|m| Message {
+                role: m.role.clone(),
+                content: m.content.clone(),
+                tool_calls: None,
+            }).collect()
+        } else {
+            vec![]
+        };
+        drop(sessions);
         
         // Convert orchestrator ToolDefinition to providers ToolDefinition
         let tools: Vec<crate::providers::ToolDefinition> = self.orchestrator.get_definitions()
@@ -96,20 +125,24 @@ impl AgentCore {
             })
             .collect();
         
+        // Build messages: system + history + current
+        let mut messages = vec![
+            Message {
+                role: "system".into(),
+                content: system_prompt,
+                tool_calls: None,
+            },
+        ];
+        messages.extend(history_messages);
+        messages.push(Message {
+            role: "user".into(),
+            content: message.to_string(),
+            tool_calls: None,
+        });
+        
         CompletionRequest {
             model: self.config.agent.default_model.clone(),
-            messages: vec![
-                Message {
-                    role: "system".into(),
-                    content: system_prompt,
-                    tool_calls: None,
-                },
-                Message {
-                    role: "user".into(),
-                    content: message.to_string(),
-                    tool_calls: None,
-                },
-            ],
+            messages,
             temperature: Some(self.config.agent.temperature),
             max_tokens: Some(self.config.agent.max_tokens),
             tools: Some(tools),
@@ -123,7 +156,7 @@ impl AgentCore {
         let tools = self.orchestrator.get_definitions();
         let builder = SystemPromptBuilder::new(self.persona.clone())
             .with_tools(&tools)
-            .with_skills(&[]); // TODO: Add skills
+            .with_skills(&[]);
         
         builder.build()
     }
@@ -132,25 +165,34 @@ impl AgentCore {
     
     /// Get memory summary
     pub async fn memory_summary(&self) -> String {
-        // TODO: Get actual memory summary
-        "No long-term memory stored yet.".into()
+        let sessions = self.sessions.read().await;
+        if sessions.is_empty() {
+            return "No conversation history stored yet.".to_string();
+        }
+        
+        let mut summary = String::new();
+        for (key, session) in sessions.iter() {
+            summary.push_str(&format!("Session: {} ({} messages)\n", key, session.messages.len()));
+        }
+        summary
     }
     
     /// Clear session
-    pub async fn clear_session(&self, _session_id: &str) -> Result<()> {
-        // TODO: Implement session clearing
+    pub async fn clear_session(&self, session_id: &str) -> Result<()> {
+        let mut sessions = self.sessions.write().await;
+        sessions.remove(session_id);
         Ok(())
     }
     
     /// Recover session
     pub async fn recover_session(&self, _session_id: &str) -> Result<()> {
-        // TODO: Implement session recovery
         Ok(())
     }
     
     /// New session
-    pub async fn new_session(&self, _session_id: &str) -> Result<()> {
-        // TODO: Implement new session
+    pub async fn new_session(&self, session_id: &str) -> Result<()> {
+        let mut sessions = self.sessions.write().await;
+        sessions.insert(session_id.to_string(), SessionHistory::new(session_id));
         Ok(())
     }
     
@@ -177,11 +219,4 @@ impl AgentCore {
     pub fn model_name(&self) -> &str {
         &self.config.agent.default_model
     }
-}
-
-fn uuid() -> String {
-    format!("{:016x}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() as u64)
 }

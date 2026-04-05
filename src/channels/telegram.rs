@@ -351,7 +351,7 @@ async fn handle_message(
     let session = state.get_or_create_session(chat_id).await;
 
     // Process with agent
-    let response = state.agent.process(text).await;
+    let response = state.agent.process(text, Some(chat_id)).await;
 
     // Update session stats
     state.update_session(chat_id, None).await;
