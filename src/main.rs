@@ -96,6 +96,21 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     
     info!("⚡ Core initialized in {:?}", start.elapsed());
     
+    // Start Telegram channel if enabled
+    let tg_handle = if config.channels.telegram.enabled {
+        let tg_agent = agent.clone();
+        let tg_config = config.channels.telegram.clone();
+        let tg_persona = config.persona.clone();
+        info!("📱 Starting Telegram gateway...");
+        Some(tokio::spawn(async move {
+            if let Err(e) = channels::telegram::start(tg_agent, Some(tg_config), tg_persona).await {
+                tracing::error!("Telegram error: {}", e);
+            }
+        }))
+    } else {
+        None
+    };
+    
     // Build HTTP router
     let app = Router::new()
         .route("/health", axum::routing::get(|| async { "OK" }))
