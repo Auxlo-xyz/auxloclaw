@@ -1,4 +1,5 @@
 //! Agent Core - Central orchestration
+
 use anyhow::Result;
 use std::sync::Arc;
 
@@ -7,10 +8,10 @@ use crate::memory::{MemoryEngine, SessionHistory};
 use crate::orchestrator::ToolOrchestrator;
 use crate::providers::{CompletionRequest, Message, ProviderPool};
 use crate::streaming::StreamSession;
+use crate::persona::SystemPromptBuilder;
 
 /// Agent core
 pub struct AgentCore {
-    #[allow(dead_code)]
     config: AppConfig,
     memory: Arc<MemoryEngine>,
     providers: Arc<ProviderPool>,
@@ -54,13 +55,30 @@ impl AgentCore {
         session
     }
 
+    /// Build the system prompt
+    fn build_system_prompt(&self) -> String {
+        // Get tool definitions
+        let tools = self.orchestrator.get_definitions();
+        
+        // Get skills (placeholder for now)
+        let skills: Vec<(String, String)> = vec![];
+        
+        // Build prompt using persona
+        SystemPromptBuilder::new(self.config.persona.clone())
+            .with_tools(&tools)
+            .with_skills(&skills)
+            .build()
+    }
+
     async fn build_request(&self, message: &str) -> CompletionRequest {
+        let system_prompt = self.build_system_prompt();
+        
         CompletionRequest {
             model: self.config.agent.default_model.clone(),
             messages: vec![
                 Message {
                     role: "system".into(),
-                    content: "You are AUXLOCLAW, a high-performance AI agent.".into(),
+                    content: system_prompt,
                     tool_calls: None,
                 },
                 Message {

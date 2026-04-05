@@ -23,73 +23,55 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Start the gateway server (Telegram, Discord, HTTP API)
+    /// Start the gateway server
     Gateway {
-        /// Port to listen on
         #[arg(short, long, default_value = "18789")]
         port: u16,
-        
-        /// Host to bind to
         #[arg(long, default_value = "0.0.0.0")]
         host: String,
     },
-
-    /// Chat with AUXLOCLAW (one-shot or interactive)
+    /// Chat with the agent
     Chat {
-        /// The message to send (if not provided, enters interactive mode)
         message: Option<String>,
-        
-        /// Model to use
         #[arg(short, long)]
         model: Option<String>,
-        
-        /// Stream the response
         #[arg(short, long)]
         stream: bool,
     },
-
     /// Interactive setup wizard
     Setup {
-        /// Non-interactive mode with defaults
         #[arg(short, long)]
         quick: bool,
-        
-        /// Enable Telegram
         #[arg(long)]
         telegram: bool,
-        
-        /// Enable Discord
         #[arg(long)]
         discord: bool,
     },
-
     /// Manage configuration
     Config {
         #[command(subcommand)]
         action: ConfigCommands,
     },
-
     /// Manage skills
     Skill {
         #[command(subcommand)]
         action: SkillCommands,
     },
-
     /// Manage providers
     Provider {
         #[command(subcommand)]
         action: ProviderCommands,
     },
-
+    /// Manage persona
+    Persona {
+        #[command(subcommand)]
+        action: PersonaCommands,
+    },
     /// Show system status
     Status,
-
     /// Run a skill
     Run {
-        /// Skill name
         skill: String,
-        
-        /// Arguments for the skill
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
     },
@@ -230,6 +212,62 @@ pub enum ProviderCommands {
         /// Provider name
         name: String,
     },
+}
+
+#[derive(Subcommand)]
+pub enum PersonaCommands {
+    /// Show current persona
+    Show,
+
+    /// Edit persona
+    Edit,
+
+    /// Set persona name
+    Name {
+        /// New name
+        name: String,
+    },
+
+    /// Set persona behavior
+    Behavior {
+        /// Behavior instructions
+        text: String,
+    },
+
+    /// Set response style
+    Style {
+        /// Length: concise, balanced, detailed
+        #[arg(short, long)]
+        length: Option<String>,
+        
+        /// Tone: professional, casual, technical, friendly
+        #[arg(short, long)]
+        tone: Option<String>,
+        
+        /// No em dashes
+        #[arg(long)]
+        no_em_dashes: bool,
+        
+        /// No emojis
+        #[arg(long)]
+        no_emojis: bool,
+    },
+
+    /// Load persona from file
+    Load {
+        /// Path to PERSONA.md file
+        file: String,
+    },
+
+    /// Save current persona to file
+    Save {
+        /// Output file path
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+
+    /// Reset to default persona
+    Reset,
 }
 
 impl Cli {

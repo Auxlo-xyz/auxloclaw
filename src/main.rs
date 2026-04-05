@@ -3,6 +3,7 @@
 mod agent;
 mod channels;
 mod config;
+mod persona;
 mod memory;
 mod providers;
 mod skills;
@@ -58,6 +59,10 @@ async fn main() -> anyhow::Result<()> {
         
         Commands::Provider { action } => {
             commands::provider::handle_provider(action)?;
+        }
+        
+        Commands::Persona { action } => {
+            commands::persona::handle_persona(action)?;
         }
         
         Commands::Status => {

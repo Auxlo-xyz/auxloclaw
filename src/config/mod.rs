@@ -6,9 +6,13 @@ use std::path::Path;
 use std::fs;
 use anyhow::{Context, Result};
 
+use crate::persona::PersonaConfig;
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppConfig {
     pub agent: AgentConfig,
+    #[serde(default)]
+    pub persona: PersonaConfig,
     pub providers: ProvidersConfig,
     pub memory: MemoryConfig,
     pub channels: ChannelsConfig,
@@ -243,6 +247,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             agent: AgentConfig::default(),
+            persona: PersonaConfig::default(),
             providers: ProvidersConfig::default(),
             memory: MemoryConfig::default(),
             channels: ChannelsConfig::default(),
