@@ -49,21 +49,59 @@ fn default_length() -> ResponseLength {
     ResponseLength::Concise
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ResponseLength {
-    #[default]
+    #[serde(rename = "concise")]
     Concise,
+    #[serde(rename = "balanced")]
     Balanced,
+    #[serde(rename = "detailed")]
     Detailed,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+impl Default for ResponseLength {
+    fn default() -> Self {
+        Self::Balanced
+    }
+}
+
+impl std::fmt::Display for ResponseLength {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResponseLength::Concise => write!(f, "concise"),
+            ResponseLength::Balanced => write!(f, "balanced"),
+            ResponseLength::Detailed => write!(f, "detailed"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Tone {
-    #[default]
+    #[serde(rename = "professional")]
     Professional,
+    #[serde(rename = "casual")]
     Casual,
+    #[serde(rename = "technical")]
     Technical,
+    #[serde(rename = "friendly")]
     Friendly,
+}
+
+impl Default for Tone {
+    fn default() -> Self {
+        Self::Professional
+    }
+}
+
+impl std::fmt::Display for Tone {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Tone::Professional => write!(f, "professional"),
+            Tone::Casual => write!(f, "casual"),
+            Tone::Technical => write!(f, "technical"),
+            Tone::Friendly => write!(f, "friendly"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]

@@ -54,6 +54,7 @@ walkdir = "2"
 dirs = "5"
 dialoguer = { version = "0.11", features = ["history"] }
 sysinfo = "0.30"
+uuid = "1"
 
 # Crypto & Security
 sha2 = "0.10"
@@ -66,7 +67,7 @@ chrono = { version = "0.4", features = ["serde"] }
 rayon = "1"
 
 # Telegram
-teloxide = { version = "0.12", features = ["rustls", "webhooks-axum"], default-features = false }
+teloxide = { version = "0.12", features = ["rustls", "webhooks-axum", "macros"], default-features = false }
 
 # Discord (simplified - stub for now)
 # serenity = { version = "0.12", default-features = false, features = ["rustls_backend", "gateway", "model", "http", "client", "cache", "utils"] }

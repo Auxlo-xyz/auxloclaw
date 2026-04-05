@@ -8,7 +8,20 @@ use crate::memory::{MemoryEngine, SessionHistory};
 use crate::orchestrator::ToolOrchestrator;
 use crate::providers::{CompletionRequest, Message, ProviderPool};
 use crate::streaming::StreamSession;
-use crate::persona::SystemPromptBuilder;
+use crate::persona::PersonaConfig;
+
+/// Usage statistics
+#[derive(Debug, Clone, Default)]
+pub struct Usage {
+    pub total_messages: u64,
+    pub total_tokens: u64,
+}
+
+/// Tool info
+pub struct ToolInfo {
+    pub name: String,
+    pub description: String,
+}
 
 /// Agent core
 pub struct AgentCore {
@@ -16,6 +29,8 @@ pub struct AgentCore {
     memory: Arc<MemoryEngine>,
     providers: Arc<ProviderPool>,
     orchestrator: Arc<ToolOrchestrator>,
+    persona: PersonaConfig,
+    usage: std::sync::atomic::AtomicU64,
 }
 
 impl AgentCore {
@@ -25,11 +40,14 @@ impl AgentCore {
         orchestrator: Arc<ToolOrchestrator>,
         config: AppConfig,
     ) -> Self {
+        let persona = config.persona.clone();
         Self {
             config,
             memory,
             providers,
             orchestrator,
+            persona,
+            usage: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -38,7 +56,13 @@ impl AgentCore {
         let request = self.build_request(message).await;
         
         match self.providers.complete(request).await {
-            Ok(response) => response.content,
+            Ok(response) => {
+                // Update usage
+                if let Some(usage) = response.usage {
+                    self.usage.fetch_add(usage.total_tokens as u64, std::sync::atomic::Ordering::Relaxed);
+                }
+                response.content
+            },
             Err(e) => format!("Error: {}", e),
         }
     }
@@ -46,7 +70,7 @@ impl AgentCore {
     /// Process with streaming
     pub async fn process_stream(&self, message: &str) -> StreamSession {
         let request = self.build_request(message).await;
-        let _ = request; // Suppress unused warning
+        let _ = request;
         
         let (session, _rx) = StreamSession::new(
             uuid(),
@@ -55,23 +79,21 @@ impl AgentCore {
         session
     }
 
-    /// Build the system prompt
-    fn build_system_prompt(&self) -> String {
-        // Get tool definitions
-        let tools = self.orchestrator.get_definitions();
-        
-        // Get skills (placeholder for now)
-        let skills: Vec<(String, String)> = vec![];
-        
-        // Build prompt using persona
-        SystemPromptBuilder::new(self.config.persona.clone())
-            .with_tools(&tools)
-            .with_skills(&skills)
-            .build()
-    }
-
     async fn build_request(&self, message: &str) -> CompletionRequest {
         let system_prompt = self.build_system_prompt();
+        
+        // Convert orchestrator ToolDefinition to providers ToolDefinition
+        let tools: Vec<crate::providers::ToolDefinition> = self.orchestrator.get_definitions()
+            .into_iter()
+            .map(|t| crate::providers::ToolDefinition {
+                tool_type: t.tool_type,
+                function: crate::providers::FunctionDefinition {
+                    name: t.function.name,
+                    description: t.function.description,
+                    parameters: t.function.parameters,
+                },
+            })
+            .collect();
         
         CompletionRequest {
             model: self.config.agent.default_model.clone(),
@@ -89,17 +111,70 @@ impl AgentCore {
             ],
             temperature: Some(self.config.agent.temperature),
             max_tokens: Some(self.config.agent.max_tokens),
-            tools: None,
+            tools: Some(tools),
             stream: None,
         }
     }
-
-    pub async fn remember(&self, key: &str, content: &str) -> Result<()> {
-        self.memory.store(key, content, None).await
+    
+    fn build_system_prompt(&self) -> String {
+        use crate::persona::SystemPromptBuilder;
+        
+        let tools = self.orchestrator.get_definitions();
+        let builder = SystemPromptBuilder::new(self.persona.clone())
+            .with_tools(&tools)
+            .with_skills(&[]); // TODO: Add skills
+        
+        builder.build()
     }
 
-    pub async fn recall(&self, key: &str) -> Option<String> {
-        self.memory.retrieve(key).await.map(|e| e.content)
+    // === Telegram command helpers ===
+    
+    /// Get memory summary
+    pub async fn memory_summary(&self) -> String {
+        // TODO: Get actual memory summary
+        "No long-term memory stored yet.".into()
+    }
+    
+    /// Clear session
+    pub async fn clear_session(&self, _session_id: &str) -> Result<()> {
+        // TODO: Implement session clearing
+        Ok(())
+    }
+    
+    /// Recover session
+    pub async fn recover_session(&self, _session_id: &str) -> Result<()> {
+        // TODO: Implement session recovery
+        Ok(())
+    }
+    
+    /// New session
+    pub async fn new_session(&self, _session_id: &str) -> Result<()> {
+        // TODO: Implement new session
+        Ok(())
+    }
+    
+    /// List tools
+    pub fn list_tools(&self) -> Vec<ToolInfo> {
+        self.orchestrator.get_definitions()
+            .into_iter()
+            .map(|t| ToolInfo {
+                name: t.function.name,
+                description: t.function.description,
+            })
+            .collect()
+    }
+    
+    /// Get usage stats
+    pub async fn get_usage_stats(&self) -> Usage {
+        Usage {
+            total_messages: 0,
+            total_tokens: self.usage.load(std::sync::atomic::Ordering::Relaxed),
+        }
+    }
+    
+    /// Get model name
+    pub fn model_name(&self) -> &str {
+        &self.config.agent.default_model
     }
 }
 
