@@ -135,25 +135,37 @@ pub enum ConfigCommands {
 
 #[derive(Subcommand)]
 pub enum SkillCommands {
-    /// List all available skills
+    /// List installed skills
     List {
-        /// Filter by category
-        #[arg(short, long)]
-        category: Option<String>,
-        
-        /// Show details
+        /// Show detailed info
         #[arg(short, long)]
         detailed: bool,
     },
 
-    /// Install a skill from registry
+    /// Search for skills in the registry
+    Search {
+        /// Search query
+        query: String,
+    },
+
+    /// Install a skill from registry or URL
     Install {
-        /// Skill name or URL
-        skill: String,
+        /// Skill name to install from registry
+        name: Option<String>,
         
-        /// Force reinstall
+        /// Install from GitHub URL
         #[arg(short, long)]
-        force: bool,
+        url: Option<String>,
+        
+        /// Install from git repository
+        #[arg(short, long)]
+        git: Option<String>,
+    },
+
+    /// Uninstall a skill
+    Uninstall {
+        /// Skill name
+        name: String,
     },
 
     /// Create a new skill
@@ -161,53 +173,24 @@ pub enum SkillCommands {
         /// Skill name
         name: String,
         
-        /// Category
-        #[arg(short, long, default_value = "custom")]
-        category: String,
-        
-        /// Open in editor after creation
+        /// Description
         #[arg(short, long)]
-        edit: bool,
+        description: Option<String>,
     },
 
-    /// Show skill details
-    Show {
-        /// Skill name
-        skill: String,
-    },
-
-    /// Edit a skill
-    Edit {
-        /// Skill name
-        skill: String,
-    },
-
-    /// Delete a skill
-    Delete {
-        /// Skill name
-        skill: String,
-        
-        /// Confirm deletion
-        #[arg(short, long)]
-        yes: bool,
-    },
-
-    /// Search skills
-    Search {
-        /// Search query
-        query: String,
-    },
-
-    /// Update all skills from registry
+    /// Update a skill from registry
     Update {
-        /// Update specific skill
-        skill: Option<String>,
+        /// Skill name
+        name: String,
     },
 
-    /// Validate a skill
-    Validate {
+    /// Browse available skills in registry
+    Browse,
+
+    /// Show skill info
+    Info {
         /// Skill name
-        skill: String,
+        name: String,
     },
 }
 

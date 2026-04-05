@@ -53,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
         }
         
         Commands::Skill { action } => {
-            commands::skill::handle_skill(action)?;
+            commands::skill::handle_skill(action).await?;
         }
         
         Commands::Provider { action } => {
