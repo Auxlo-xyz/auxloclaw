@@ -57,9 +57,20 @@ pub struct ToolOrchestrator {
 
 impl ToolOrchestrator {
     pub fn new() -> Self {
-        Self {
+        let orchestrator = Self {
             registry: DashMap::new(),
-        }
+        };
+        
+        // Register built-in tools
+        orchestrator.register_builtin_tools();
+        
+        orchestrator
+    }
+    
+    fn register_builtin_tools(&self) {
+        self.register(Arc::new(FileReadTool));
+        self.register(Arc::new(FileWriteTool));
+        self.register(Arc::new(ExecTool));
     }
 
     pub fn register(&self, tool: Arc<dyn Tool>) {

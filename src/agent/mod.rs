@@ -9,6 +9,7 @@ use crate::orchestrator::ToolOrchestrator;
 use crate::providers::{CompletionRequest, Message, ProviderPool};
 use crate::streaming::StreamSession;
 use crate::persona::PersonaConfig;
+use crate::skills::SkillRegistry;
 
 /// Usage statistics
 #[derive(Debug, Clone, Default)]

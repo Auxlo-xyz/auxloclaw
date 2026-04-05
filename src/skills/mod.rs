@@ -21,7 +21,7 @@ use parking_lot::RwLock;
 pub mod registry;
 pub mod installer;
 
-use registry::SkillRegistry;
+pub use registry::SkillRegistry;
 pub use installer::SkillInstaller;
 
 /// Skill metadata (frontmatter)

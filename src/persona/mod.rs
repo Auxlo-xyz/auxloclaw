@@ -204,6 +204,7 @@ impl SystemPromptBuilder {
             "No tools available.".into()
         } else {
             let mut desc = String::from("## Available Tools\n\n");
+            desc.push_str("You have access to the following tools. Use them when helpful.\n\n");
             for tool in tools {
                 desc.push_str(&format!(
                     "- **{}**: {}\n",
@@ -211,6 +212,7 @@ impl SystemPromptBuilder {
                     tool.function.description
                 ));
             }
+            desc.push_str("\nTo use a tool, respond with a tool_call. The system will execute it and return the result.\n");
             desc
         };
         self
