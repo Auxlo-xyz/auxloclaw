@@ -8,7 +8,7 @@ use tokio::sync::RwLock;
 use teloxide::{
     dispatching::Dispatcher,
     prelude::*,
-    types::{ParseMode, Update, ChatId},
+    types::{ChatAction, ParseMode, Update, ChatId},
     utils::command::BotCommands,
     Bot,
 };
@@ -17,7 +17,7 @@ use crate::agent::AgentCore;
 use crate::config::TelegramConfig;
 use crate::persona::PersonaConfig;
 
-/// Telegram commands matching the screenshot
+/// Telegram commands
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase")]
 pub enum Command {
@@ -138,7 +138,7 @@ pub async fn start(agent: Arc<AgentCore>, config: Option<TelegramConfig>, person
     let bot = Bot::new(config.token.clone());
     let state = Arc::new(TelegramState::new(agent, config, persona));
 
-    // Set bot commands - manually build the list
+    // Set bot commands
     let commands = vec![
         teloxide::types::BotCommand { command: "memory".into(), description: "View agent memory".into() },
         teloxide::types::BotCommand { command: "clear".into(), description: "Clear conversation history".into() },
@@ -181,13 +181,14 @@ async fn handle_command(
 ) -> ResponseResult<()> {
     let chat_id: i64 = msg.chat.id.0;
 
+    // Show typing indicator for commands too
+    let _ = bot.send_chat_action(ChatId(chat_id), ChatAction::Typing).await;
+
     let response = match cmd {
         Command::Memory => {
             let memory = state.agent.memory_summary().await;
             format!(
-                "🧠 *Agent Memory*\n\n\
-                {}\n\n\
-                _Use /clear to reset session_",
+                "🧠 *Agent Memory*\n\n{}\n\n_Use /clear to reset session_",
                 escape_md(&memory)
             )
         }
@@ -319,11 +320,7 @@ async fn handle_command(
         Command::New => {
             state.clear_session(chat_id).await;
             let _ = state.agent.new_session(&format!("tg:{}", chat_id)).await;
-            format!(
-                "🆕 *New Session Started*\n\n\
-                Previous context cleared\\. I'm ready for a fresh conversation\\!\n\n\
-                _What would you like to discuss?_"
-            )
+            "🆕 *New Session Started*\n\nPrevious context cleared\\. I'm ready for a fresh conversation\\!\n\n_What would you like to discuss?_".to_string()
         }
     };
 
@@ -347,6 +344,9 @@ async fn handle_message(
         return Ok(());
     }
 
+    // Show typing indicator while processing
+    bot.send_chat_action(ChatId(chat_id), ChatAction::Typing).await?;
+
     // Get session
     let session = state.get_or_create_session(chat_id).await;
 
@@ -358,7 +358,6 @@ async fn handle_message(
 
     // Check voice mode
     if session.voice_mode {
-        // For voice mode, send text with voice indicator
         bot.send_message(ChatId(chat_id), format!("🎤 {}", escape_md(&response)))
             .parse_mode(ParseMode::MarkdownV2)
             .await?;
