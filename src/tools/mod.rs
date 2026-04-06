@@ -1,6 +1,7 @@
 //! Tools module
 
 pub mod builtin;
+pub mod web;
 
 use crate::orchestrator::{Tool, ToolDefinition};
 

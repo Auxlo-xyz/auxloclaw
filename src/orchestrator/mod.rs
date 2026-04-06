@@ -63,6 +63,8 @@ impl ToolOrchestrator {
         
         // Register built-in tools
         orchestrator.register_builtin_tools();
+        orchestrator.register_web_tools();
+        
         
         orchestrator
     }
@@ -71,6 +73,20 @@ impl ToolOrchestrator {
         self.register(Arc::new(FileReadTool));
         self.register(Arc::new(FileWriteTool));
         self.register(Arc::new(ExecTool));
+    }
+
+    fn register_web_tools(&self) {
+        use crate::tools::web::*;
+        
+        self.register(Arc::new(WebSearchTool));
+        self.register(Arc::new(BrowserOpenTool));
+        self.register(Arc::new(BrowserSnapshotTool));
+        self.register(Arc::new(BrowserClickTool));
+        self.register(Arc::new(BrowserFillTool));
+        self.register(Arc::new(BrowserScreenshotTool));
+        self.register(Arc::new(BrowserGetTool));
+        self.register(Arc::new(BrowserCloseTool));
+        self.register(Arc::new(XFetchTool));
     }
 
     pub fn register(&self, tool: Arc<dyn Tool>) {

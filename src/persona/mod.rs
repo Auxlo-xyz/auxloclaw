@@ -205,17 +205,122 @@ impl SystemPromptBuilder {
         } else {
             let mut desc = String::from("## Available Tools\n\n");
             desc.push_str("You have access to the following tools. Use them when helpful.\n\n");
-            for tool in tools {
-                desc.push_str(&format!(
-                    "- **{}**: {}\n",
-                    tool.function.name,
-                    tool.function.description
-                ));
+            
+            // Categorize tools
+            desc.push_str("### File Operations\n");
+            for tool in tools.iter().filter(|t| t.function.name.starts_with("file")) {
+                desc.push_str(&self.format_tool_with_usage(tool));
             }
-            desc.push_str("\nTo use a tool, respond with a tool_call. The system will execute it and return the result.\n");
+            
+            desc.push_str("\n### Web & Search\n");
+            for tool in tools.iter().filter(|t| ["web_search", "web_fetch", "x_fetch"].contains(&t.function.name.as_str())) {
+                desc.push_str(&self.format_tool_with_usage(tool));
+            }
+            
+            desc.push_str("\n### Browser Automation\n");
+            for tool in tools.iter().filter(|t| t.function.name.starts_with("browser")) {
+                desc.push_str(&self.format_tool_with_usage(tool));
+            }
+            
+            desc.push_str("\n### Execution\n");
+            for tool in tools.iter().filter(|t| t.function.name == "execute") {
+                desc.push_str(&self.format_tool_with_usage(tool));
+            }
+            
+            desc.push_str("\n### Memory\n");
+            for tool in tools.iter().filter(|t| t.function.name == "memory") {
+                desc.push_str(&self.format_tool_with_usage(tool));
+            }
+            
+            desc.push_str("\n## Tool Usage\n\n");
+            desc.push_str("When you need to use a tool, make a tool call. The system will execute it and return the result.\n");
+            desc.push_str("You can make multiple tool calls in a single response if they are independent.\n");
+            desc.push_str("After receiving tool results, synthesize the information and respond to the user.\n");
+            
             desc
         };
         self
+    }
+    
+    fn format_tool_with_usage(&self, tool: &super::orchestrator::ToolDefinition) -> String {
+        let mut formatted = format!("\n**{}** - {}\n", tool.function.name, tool.function.description);
+        
+        // Add specific usage examples
+        match tool.function.name.as_str() {
+            "web_search" => {
+                formatted.push_str("  Usage: {\"tool\": \"web_search\", \"arguments\": {\"query\": \"search terms\", \"num_results\": 5}}\n");
+                formatted.push_str("  - Searches the web using multiple engines (Google, DuckDuckGo, Brave)\n");
+                formatted.push_str("  - Returns titles, URLs, and snippets\n");
+                formatted.push_str("  - Use for finding current information, news, or research\n");
+            }
+            "web_fetch" => {
+                formatted.push_str("  Usage: {\"tool\": \"web_fetch\", \"arguments\": {\"url\": \"https://example.com\"}}\n");
+                formatted.push_str("  - Fetches full content from a URL\n");
+                formatted.push_str("  - Returns the page content as text\n");
+                formatted.push_str("  - Use after web_search to get full articles\n");
+            }
+            "x_fetch" => {
+                formatted.push_str("  Usage: {\"tool\": \"x_fetch\", \"arguments\": {\"tweet_id\": \"1234567890\"}}\n");
+                formatted.push_str("  - Fetches a single tweet by ID from X/Twitter\n");
+                formatted.push_str("  - Returns tweet text, author, and metadata\n");
+                formatted.push_str("  - Use when user shares a tweet link or asks about specific tweet\n");
+            }
+            "browser_open" => {
+                formatted.push_str("  Usage: {\"tool\": \"browser_open\", \"arguments\": {\"url\": \"https://example.com\"}}\n");
+                formatted.push_str("  - Opens a browser session to a URL\n");
+                formatted.push_str("  - Use for interactive browsing, forms, or authentication\n");
+            }
+            "browser_click" => {
+                formatted.push_str("  Usage: {\"tool\": \"browser_click\", \"arguments\": {\"selector\": \"button.submit\"}}\n");
+                formatted.push_str("  - Clicks an element on the current page\n");
+            }
+            "browser_type" => {
+                formatted.push_str("  Usage: {\"tool\": \"browser_type\", \"arguments\": {\"selector\": \"input#search\", \"text\": \"query\"}}\n");
+                formatted.push_str("  - Types text into an input field\n");
+            }
+            "browser_read" => {
+                formatted.push_str("  Usage: {\"tool\": \"browser_read\", \"arguments\": {}}\n");
+                formatted.push_str("  - Reads the current page content\n");
+                formatted.push_str("  - Returns page text and structure\n");
+            }
+            "browser_screenshot" => {
+                formatted.push_str("  Usage: {\"tool\": \"browser_screenshot\", \"arguments\": {}}\n");
+                formatted.push_str("  - Takes a screenshot of the current page\n");
+                formatted.push_str("  - Use for visual verification\n");
+            }
+            "browser_close" => {
+                formatted.push_str("  Usage: {\"tool\": \"browser_close\", \"arguments\": {}}\n");
+                formatted.push_str("  - Closes the browser session\n");
+            }
+            "file_read" => {
+                formatted.push_str("  Usage: {\"tool\": \"file_read\", \"arguments\": {\"path\": \"/path/to/file\"}}\n");
+                formatted.push_str("  - Reads file contents\n");
+                formatted.push_str("  - Returns full text content\n");
+            }
+            "file_write" => {
+                formatted.push_str("  Usage: {\"tool\": \"file_write\", \"arguments\": {\"path\": \"/path/to/file\", \"content\": \"text\"}}\n");
+                formatted.push_str("  - Writes content to a file\n");
+                formatted.push_str("  - Creates or overwrites the file\n");
+            }
+            "execute" => {
+                formatted.push_str("  Usage: {\"tool\": \"execute\", \"arguments\": {\"command\": \"ls -la\"}}\n");
+                formatted.push_str("  - Executes a shell command\n");
+                formatted.push_str("  - Returns stdout, stderr, and exit code\n");
+                formatted.push_str("  - Use for system operations, scripts, or file manipulation\n");
+            }
+            "memory" => {
+                formatted.push_str("  Usage: {\"tool\": \"memory\", \"arguments\": {\"action\": \"store\", \"key\": \"name\", \"value\": \"value\"}}\n");
+                formatted.push_str("  - Store: {\"action\": \"store\", \"key\": \"...\", \"value\": \"...\"}\n");
+                formatted.push_str("  - Retrieve: {\"action\": \"retrieve\", \"key\": \"...\"}\n");
+                formatted.push_str("  - Search: {\"action\": \"search\", \"query\": \"...\"}\n");
+            }
+            _ => {
+                formatted.push_str(&format!("  Parameters: {}\n", 
+                    serde_json::to_string(&tool.function.parameters).unwrap_or_default()));
+            }
+        }
+        
+        formatted
     }
     
     pub fn with_skills(mut self, skills: &[(String, String)]) -> Self {
