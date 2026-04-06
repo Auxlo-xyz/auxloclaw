@@ -15,6 +15,7 @@ use teloxide::{
 
 use crate::agent::AgentCore;
 use crate::config::TelegramConfig;
+use crate::channels::markdown::markdown_to_telegram;
 use crate::persona::PersonaConfig;
 
 /// Telegram commands
@@ -362,7 +363,7 @@ async fn handle_message(
             .parse_mode(ParseMode::MarkdownV2)
             .await?;
     } else {
-        bot.send_message(ChatId(chat_id), escape_md(&response))
+        bot.send_message(ChatId(chat_id), markdown_to_telegram(&response))
             .parse_mode(ParseMode::MarkdownV2)
             .await?;
     }

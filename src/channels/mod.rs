@@ -45,4 +45,4 @@ pub trait ChannelAdapter: Send + Sync {
     async fn send(&self, message: OutboundMessage) -> anyhow::Result<()>;
     async fn receive(&self) -> Option<InboundMessage>;
     fn channel_type(&self) -> ChannelType;
-}
+}pub mod markdown;
