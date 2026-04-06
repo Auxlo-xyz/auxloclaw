@@ -16,10 +16,21 @@ pub async fn handle_chat(
     let config = crate::config::AppConfig::load(config_path.to_str().unwrap_or("~/.auxloclaw/config.toml"))?;
     
     // Initialize components
-    let memory = Arc::new(crate::memory::MemoryEngine::new(&config.memory).await?);
+    let memory = Arc::new(crate::memory::MemoryEngine::new(&config.memory)?);
     let providers = Arc::new(crate::providers::ProviderPool::new(config.providers.clone()));
     let orchestrator = Arc::new(crate::orchestrator::ToolOrchestrator::new());
-    let agent = Arc::new(crate::agent::AgentCore::new(memory, providers, orchestrator, config.clone()));
+    
+    // Initialize session store
+    let session_db = shellexpand::tilde(&config.memory.database_path).into_owned();
+    let session_store = Arc::new(crate::memory::SessionStore::new(&session_db)?);
+    
+    let agent = Arc::new(crate::agent::AgentCore::new(
+        memory,
+        providers,
+        orchestrator,
+        config.clone(),
+        session_store,
+    ));
     
     match message {
         Some(msg) => {

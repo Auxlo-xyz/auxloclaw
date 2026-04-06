@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use tokio::sync::RwLock;
 
 use crate::config::AppConfig;
-use crate::memory::{MemoryEngine, SessionHistory};
+use crate::memory::{MemoryEngine, SessionHistory, SessionStore};
 use crate::orchestrator::ToolOrchestrator;
 use crate::providers::{CompletionRequest, Message, ProviderPool};
 use crate::streaming::StreamSession;
@@ -33,8 +33,10 @@ pub struct AgentCore {
     orchestrator: Arc<ToolOrchestrator>,
     persona: PersonaConfig,
     usage: std::sync::atomic::AtomicU64,
-    /// Session histories per chat (50 message rolling window)
+    /// Session histories per chat (50 message rolling window) - in-memory cache
     sessions: RwLock<HashMap<String, SessionHistory>>,
+    /// Persistent session store
+    session_store: Arc<SessionStore>,
 }
 
 impl AgentCore {
@@ -43,6 +45,7 @@ impl AgentCore {
         providers: Arc<ProviderPool>,
         orchestrator: Arc<ToolOrchestrator>,
         config: AppConfig,
+        session_store: Arc<SessionStore>,
     ) -> Self {
         let persona = config.persona.clone();
         Self {
@@ -53,7 +56,19 @@ impl AgentCore {
             persona,
             usage: std::sync::atomic::AtomicU64::new(0),
             sessions: RwLock::new(HashMap::new()),
+            session_store,
         }
+    }
+
+    /// Load sessions from disk on startup
+    pub async fn load_sessions(&self) -> Result<()> {
+        let persisted = self.session_store.load_all()?;
+        let mut sessions = self.sessions.write().await;
+        for (key, history) in persisted {
+            sessions.insert(key, history);
+        }
+        tracing::info!(" Loaded {} sessions from disk", sessions.len());
+        Ok(())
     }
 
     /// Process a message with optional session ID for history tracking
@@ -93,6 +108,14 @@ impl AgentCore {
         if session.messages.len() > 50 {
             let remove_count = session.messages.len() - 50;
             session.messages.drain(0..remove_count);
+        }
+        
+        // Persist to disk
+        let session_clone = session.clone();
+        drop(sessions);
+        
+        if let Err(e) = self.session_store.save(session_key, &session_clone) {
+            tracing::warn!(" Failed to persist session {}: {}", session_key, e);
         }
     }
 
@@ -179,8 +202,13 @@ impl AgentCore {
     
     /// Clear session
     pub async fn clear_session(&self, session_id: &str) -> Result<()> {
+        // Remove from memory
         let mut sessions = self.sessions.write().await;
         sessions.remove(session_id);
+        drop(sessions);
+        
+        // Remove from disk
+        self.session_store.delete(session_id)?;
         Ok(())
     }
     
@@ -193,6 +221,10 @@ impl AgentCore {
     pub async fn new_session(&self, session_id: &str) -> Result<()> {
         let mut sessions = self.sessions.write().await;
         sessions.insert(session_id.to_string(), SessionHistory::new(session_id));
+        drop(sessions);
+        
+        // Persist
+        self.session_store.save(session_id, &SessionHistory::new(session_id))?;
         Ok(())
     }
     

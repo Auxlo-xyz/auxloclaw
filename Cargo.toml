@@ -30,7 +30,7 @@ serde_yaml = "0.9"
 toml = "0.8"
 
 # Database & Memory
-sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite"] }
+rusqlite = "0.28"
 
 # CLI & Config
 clap = { version = "4", features = ["derive", "env"] }
@@ -71,6 +71,10 @@ teloxide = { version = "0.12", features = ["rustls", "webhooks-axum", "macros"],
 
 # Discord (simplified - stub for now)
 # serenity = { version = "0.12", default-features = false, features = ["rustls_backend", "gateway", "model", "http", "client", "cache", "utils"] }
+
+# Utilities
+shellexpand = "1"
+sync_wrapper = "0.1"
 
 [dev-dependencies]
 tokio-test = "0.4"

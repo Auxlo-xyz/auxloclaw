@@ -92,11 +92,27 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?;
     let config = config::AppConfig::load(config_path.to_str().unwrap_or("~/.auxloclaw/config.toml"))?;
     
+    // Expand tilde in database path
+    let session_db = shellexpand::tilde(&config.memory.database_path).into_owned();
+    
     // Initialize core components
-    let memory = Arc::new(memory::MemoryEngine::new(&config.memory).await?);
+    let memory = Arc::new(memory::MemoryEngine::new(&config.memory)?);
     let providers = Arc::new(providers::ProviderPool::new(config.providers.clone()));
     let orchestrator = Arc::new(orchestrator::ToolOrchestrator::new());
-    let agent = Arc::new(agent::AgentCore::new(memory, providers, orchestrator, config.clone()));
+    
+    // Initialize persistent session store
+    let session_store = Arc::new(memory::SessionStore::new(&session_db)?);
+    
+    let agent = Arc::new(agent::AgentCore::new(
+        memory,
+        providers,
+        orchestrator,
+        config.clone(),
+        session_store,
+    ));
+    
+    // Load persisted sessions
+    agent.load_sessions().await?;
     
     info!("⚡ Core initialized in {:?}", start.elapsed());
     
