@@ -363,6 +363,14 @@ impl SystemPromptBuilder {
             prompt.push_str("\n\n");
         }
         
+        // Anti-Patterns (Never)
+        prompt.push_str("\n## Anti-Patterns (Never)\n\n");
+        prompt.push_str("- Opening with \"Great question!\" or any preamble filler\n");
+        prompt.push_str("- Listing options without picking one\n");
+        prompt.push_str("- Explaining what you\'re about to do instead of doing it\n");
+        prompt.push_str("- Asking permission for reversible, low-stakes, task-scoped actions\n");
+        prompt.push_str("- Building from scratch when existing work can be extended\n");
+
         // Footer
         prompt.push_str("---\n");
         prompt.push_str("Respond to the user's request. Use tools when helpful.\n");
