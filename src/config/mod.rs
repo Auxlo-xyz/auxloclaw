@@ -8,10 +8,10 @@ use anyhow::{Context, Result};
 
 use crate::persona::PersonaConfig;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
 pub struct AppConfig {
     pub agent: AgentConfig,
-    #[serde(default)]
     pub persona: PersonaConfig,
     pub providers: ProvidersConfig,
     pub memory: MemoryConfig,
@@ -48,16 +48,23 @@ impl Default for AgentConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProvidersConfig {
     pub primary: ProviderEntry,
+    #[serde(default)]
     pub fallbacks: Vec<ProviderEntry>,
+    #[serde(default = "default_pool_size")]
     pub connection_pool_size: usize,
+    #[serde(default = "default_timeout")]
     pub request_timeout_secs: u64,
 }
+
+fn default_pool_size() -> usize { 32 }
+fn default_timeout() -> u64 { 60 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProviderEntry {
     pub name: String,
     pub api_key: String,
     pub api_base: String,
+    #[serde(default)]
     pub extra_headers: Option<HashMap<String, String>>,
 }
 
@@ -79,17 +86,25 @@ impl Default for ProvidersConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MemoryConfig {
+    #[serde(default = "default_cache_size")]
     pub hot_cache_size: usize,
+    #[serde(default = "default_db_path")]
     pub database_path: String,
+    #[serde(default)]
     pub embedding_model: Option<String>,
+    #[serde(default = "default_consolidation")]
     pub consolidation_interval_secs: u64,
 }
+
+fn default_cache_size() -> usize { 1000 }
+fn default_db_path() -> String { "~/.auxloclaw/memory.db".into() }
+fn default_consolidation() -> u64 { 300 }
 
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
             hot_cache_size: 1000,
-            database_path: "auxloclaw_memory.db".into(),
+            database_path: "~/.auxloclaw/memory.db".into(),
             embedding_model: None,
             consolidation_interval_secs: 300,
         }
@@ -97,6 +112,7 @@ impl Default for MemoryConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
 pub struct ChannelsConfig {
     pub telegram: TelegramConfig,
     pub discord: DiscordConfig,
@@ -104,20 +120,17 @@ pub struct ChannelsConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
 pub struct TelegramConfig {
-    #[serde(default)]
     pub enabled: bool,
-    #[serde(default)]
     pub token: String,
-    #[serde(default)]
     pub webhook_url: Option<String>,
-    #[serde(default)]
     pub allowed_users: Vec<String>,
-    #[serde(default)]
     pub group_policy: GroupPolicy,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
 pub struct DiscordConfig {
     pub enabled: bool,
     pub token: String,
@@ -125,6 +138,7 @@ pub struct DiscordConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
 pub struct SlackConfig {
     pub enabled: bool,
     pub bot_token: String,
@@ -147,13 +161,23 @@ impl Default for GroupPolicy {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ToolsConfig {
+    #[serde(default = "default_true")]
     pub exec_enabled: bool,
+    #[serde(default = "default_exec_timeout")]
     pub exec_timeout_secs: u64,
+    #[serde(default = "default_true")]
     pub restrict_to_workspace: bool,
+    #[serde(default)]
     pub web_search_enabled: bool,
+    #[serde(default = "default_brave")]
     pub web_search_provider: String,
+    #[serde(default)]
     pub web_search_api_key: Option<String>,
 }
+
+fn default_true() -> bool { true }
+fn default_exec_timeout() -> u64 { 60 }
+fn default_brave() -> String { "brave".into() }
 
 impl Default for ToolsConfig {
     fn default() -> Self {
@@ -170,10 +194,16 @@ impl Default for ToolsConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ServerConfig {
+    #[serde(default = "default_host")]
     pub host: String,
+    #[serde(default = "default_port")]
     pub port: u16,
+    #[serde(default = "default_true")]
     pub cors_enabled: bool,
 }
+
+fn default_host() -> String { "0.0.0.0".into() }
+fn default_port() -> u16 { 18789 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -240,19 +270,5 @@ impl AppConfig {
         }
 
         self
-    }
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            agent: AgentConfig::default(),
-            persona: PersonaConfig::default(),
-            providers: ProvidersConfig::default(),
-            memory: MemoryConfig::default(),
-            channels: ChannelsConfig::default(),
-            tools: ToolsConfig::default(),
-            server: ServerConfig::default(),
-        }
     }
 }
