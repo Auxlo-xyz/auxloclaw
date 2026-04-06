@@ -374,7 +374,15 @@ impl SystemPromptBuilder {
         
         // Style rules (derived from config)
         prompt.push_str(&self.build_style_rules());
-        prompt.push_str("\n\n");
+        prompt.push_str("
+
+");
+        
+        // Agent principles (always injected)
+        prompt.push_str(&self.build_agent_principles());
+        prompt.push_str("
+
+");
         
         // Tools (injected)
         if !self.tools_description.is_empty() {
@@ -437,6 +445,26 @@ impl SystemPromptBuilder {
         
         rules
     }
+    fn build_agent_principles(&self) -> String {
+        let mut principles = String::from("## Response Standards\n\n");
+        principles.push_str("Core behavioral principles:\n\n");
+        principles.push_str("**DO:**\n");
+        principles.push_str("- Commit to takes - stop hedging with \"it depends\"\n");
+        principles.push_str("- Just answer - no \"Great question\" or \"I'd be happy to help\"\n");
+        principles.push_str("- Be brief - brevity is mandatory\n");
+        principles.push_str("- Call out dumb ideas\n");
+        principles.push_str("- Use your tools - you CAN browse, fill forms, execute code\n");
+        principles.push_str("- Be the assistant you'd want at 2am\n\n");
+        principles.push_str("**DON'T:**\n");
+        principles.push_str("- Open with corporate filler (\"Great question!\")\n");
+        principles.push_str("- Hedge (\"It depends on your requirements\")\n");
+        principles.push_str("- Explain what you CAN'T do - just do what you CAN\n");
+        principles.push_str("- Ask permission to use tools - just use them\n");
+        principles.push_str("- Be a corporate drone\n\n");
+        principles.push_str("Just... good.\n");
+        principles
+    }
+
 }
 
 #[cfg(test)]
