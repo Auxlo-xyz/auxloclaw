@@ -1,4 +1,4 @@
-//! Agent Core - Central orchestration
+//! Agent Core - Central orchestration with tool execution loop
 
 use anyhow::Result;
 use std::sync::Arc;
@@ -6,10 +6,9 @@ use std::collections::HashMap;
 use tokio::sync::RwLock;
 
 use crate::config::AppConfig;
-use crate::memory::{MemoryEngine, SessionHistory, SessionStore};
+use crate::memory::{MemoryEngine, SessionHistory, SessionStore, HistoryMessage};
 use crate::orchestrator::ToolOrchestrator;
-use crate::providers::{CompletionRequest, Message, ProviderPool};
-use crate::streaming::StreamSession;
+use crate::providers::{CompletionRequest, Message, ProviderPool, ToolCall};
 use crate::persona::PersonaConfig;
 
 /// Usage statistics
@@ -33,9 +32,7 @@ pub struct AgentCore {
     orchestrator: Arc<ToolOrchestrator>,
     persona: PersonaConfig,
     usage: std::sync::atomic::AtomicU64,
-    /// Session histories per chat (50 message rolling window) - in-memory cache
     sessions: RwLock<HashMap<String, SessionHistory>>,
-    /// Persistent session store
     session_store: Arc<SessionStore>,
 }
 
@@ -60,7 +57,6 @@ impl AgentCore {
         }
     }
 
-    /// Load sessions from disk on startup
     pub async fn load_sessions(&self) -> Result<()> {
         let persisted = self.session_store.load_all()?;
         let mut sessions = self.sessions.write().await;
@@ -71,31 +67,135 @@ impl AgentCore {
         Ok(())
     }
 
-    /// Process a message with optional session ID for history tracking
+    /// Process a message with tool execution loop
     pub async fn process(&self, message: &str, session_id: Option<i64>) -> String {
         let session_key = session_id
             .map(|id| format!("tg:{}", id))
             .unwrap_or_else(|| "default".to_string());
         
-        // Build request with history
-        let request = self.build_request_with_history(message, &session_key).await;
+        // Get history
+        let history = self.get_history(&session_key).await;
         
-        match self.providers.complete(request).await {
-            Ok(response) => {
-                // Store in session history
-                self.add_to_history(&session_key, "user", message).await;
-                self.add_to_history(&session_key, "assistant", &response.content).await;
-                
-                // Update usage
-                if let Some(usage) = response.usage {
-                    self.usage.fetch_add(usage.total_tokens as u64, std::sync::atomic::Ordering::Relaxed);
+        // Build initial messages
+        let mut messages = vec![Message {
+            role: "system".into(),
+            content: self.build_system_prompt(),
+            tool_calls: None,
+        }];
+        
+        // Add history
+        for m in history {
+            messages.push(Message {
+                role: m.role,
+                content: m.content,
+                tool_calls: None,
+            });
+        }
+        
+        // Add user message
+        messages.push(Message {
+            role: "user".into(),
+            content: message.to_string(),
+            tool_calls: None,
+        });
+        
+        // Tool execution loop
+        let mut iterations = 0;
+        let max_iterations = self.config.agent.max_tool_iterations as usize;
+        let mut final_response = String::new();
+        
+        loop {
+            iterations += 1;
+            if iterations > max_iterations {
+                final_response = "Error: Max tool iterations reached".into();
+                break;
+            }
+            
+            let request = self.build_request(messages.clone());
+            
+            match self.providers.complete(request).await {
+                Ok(response) => {
+                    // Update usage
+                    if let Some(usage) = &response.usage {
+                        self.usage.fetch_add(usage.total_tokens as u64, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    
+                    // Check if there are tool calls
+                    if let Some(tool_calls) = &response.tool_calls {
+                        if !tool_calls.is_empty() {
+                            // Add assistant message with tool calls
+                            messages.push(Message {
+                                role: "assistant".into(),
+                                content: String::new(),
+                                tool_calls: Some(tool_calls.clone()),
+                            });
+                            
+                            // Execute each tool
+                            for tool_call in tool_calls {
+                                let result = self.execute_tool(tool_call).await;
+                                
+                                // Add tool result as a message
+                                messages.push(Message {
+                                    role: "tool".into(),
+                                    content: result,
+                                    tool_calls: None,
+                                });
+                            }
+                            
+                            // Continue loop to get next response
+                            continue;
+                        }
+                    }
+                    
+                    // No tool calls - this is the final response
+                    final_response = response.content;
+                    break;
                 }
-                response.content
-            },
-            Err(e) => format!("Error: {}", e),
+                Err(e) => {
+                    final_response = format!("Error: {}", e);
+                    break;
+                }
+            }
+        }
+        
+        // Store in history
+        self.add_to_history(&session_key, "user", message).await;
+        self.add_to_history(&session_key, "assistant", &final_response).await;
+        
+        final_response
+    }
+    
+    async fn execute_tool(&self, tool_call: &ToolCall) -> String {
+        let args: serde_json::Value = serde_json::from_str(&tool_call.function.arguments)
+            .unwrap_or(serde_json::Value::Null);
+        
+        tracing::info!(" Executing tool: {} with args: {}", tool_call.function.name, args);
+        
+        // Execute via orchestrator
+        let results = self.orchestrator.execute_parallel(vec![
+            (tool_call.function.name.clone(), args)
+        ]).await;
+        
+        if let Some(result) = results.first() {
+            if result.success {
+                serde_json::to_string(&result.output).unwrap_or_else(|_| result.output.to_string())
+            } else {
+                format!("Tool error: {}", result.error.as_ref().unwrap_or(&"Unknown error".into()))
+            }
+        } else {
+            "Tool not found".into()
         }
     }
-
+    
+    async fn get_history(&self, session_key: &str) -> Vec<HistoryMessage> {
+        let sessions = self.sessions.read().await;
+        if let Some(session) = sessions.get(session_key) {
+            session.messages.clone()
+        } else {
+            vec![]
+        }
+    }
+    
     async fn add_to_history(&self, session_key: &str, role: &str, content: &str) {
         let mut sessions = self.sessions.write().await;
         let session = sessions
@@ -104,38 +204,18 @@ impl AgentCore {
         
         session.add_message(role, content, None);
         
-        // Keep only last 50 messages (rolling window)
         if session.messages.len() > 50 {
             let remove_count = session.messages.len() - 50;
             session.messages.drain(0..remove_count);
         }
         
-        // Persist to disk
         let session_clone = session.clone();
         drop(sessions);
         
-        if let Err(e) = self.session_store.save(session_key, &session_clone) {
-            tracing::warn!(" Failed to persist session {}: {}", session_key, e);
-        }
+        let _ = self.session_store.save(session_key, &session_clone);
     }
-
-    async fn build_request_with_history(&self, message: &str, session_key: &str) -> CompletionRequest {
-        let system_prompt = self.build_system_prompt();
-        
-        // Get session history
-        let sessions = self.sessions.read().await;
-        let history_messages = if let Some(session) = sessions.get(session_key) {
-            session.messages.iter().map(|m| Message {
-                role: m.role.clone(),
-                content: m.content.clone(),
-                tool_calls: None,
-            }).collect()
-        } else {
-            vec![]
-        };
-        drop(sessions);
-        
-        // Convert orchestrator ToolDefinition to providers ToolDefinition
+    
+    fn build_request(&self, messages: Vec<Message>) -> CompletionRequest {
         let tools: Vec<crate::providers::ToolDefinition> = self.orchestrator.get_definitions()
             .into_iter()
             .map(|t| crate::providers::ToolDefinition {
@@ -147,21 +227,6 @@ impl AgentCore {
                 },
             })
             .collect();
-        
-        // Build messages: system + history + current
-        let mut messages = vec![
-            Message {
-                role: "system".into(),
-                content: system_prompt,
-                tool_calls: None,
-            },
-        ];
-        messages.extend(history_messages);
-        messages.push(Message {
-            role: "user".into(),
-            content: message.to_string(),
-            tool_calls: None,
-        });
         
         CompletionRequest {
             model: self.config.agent.default_model.clone(),
@@ -177,20 +242,16 @@ impl AgentCore {
         use crate::persona::SystemPromptBuilder;
         
         let tools = self.orchestrator.get_definitions();
-        let builder = SystemPromptBuilder::new(self.persona.clone())
+        SystemPromptBuilder::new(self.persona.clone())
             .with_tools(&tools)
-            .with_skills(&[]);
-        
-        builder.build()
+            .with_skills(&[])
+            .build()
     }
 
-    // === Telegram command helpers ===
-    
-    /// Get memory summary
     pub async fn memory_summary(&self) -> String {
         let sessions = self.sessions.read().await;
         if sessions.is_empty() {
-            return "No conversation history stored yet.".to_string();
+            return "No conversation history stored yet.".into();
         }
         
         let mut summary = String::new();
@@ -200,35 +261,26 @@ impl AgentCore {
         summary
     }
     
-    /// Clear session
     pub async fn clear_session(&self, session_id: &str) -> Result<()> {
-        // Remove from memory
         let mut sessions = self.sessions.write().await;
         sessions.remove(session_id);
         drop(sessions);
-        
-        // Remove from disk
         self.session_store.delete(session_id)?;
         Ok(())
     }
     
-    /// Recover session
     pub async fn recover_session(&self, _session_id: &str) -> Result<()> {
         Ok(())
     }
     
-    /// New session
     pub async fn new_session(&self, session_id: &str) -> Result<()> {
         let mut sessions = self.sessions.write().await;
         sessions.insert(session_id.to_string(), SessionHistory::new(session_id));
         drop(sessions);
-        
-        // Persist
         self.session_store.save(session_id, &SessionHistory::new(session_id))?;
         Ok(())
     }
     
-    /// List tools
     pub fn list_tools(&self) -> Vec<ToolInfo> {
         self.orchestrator.get_definitions()
             .into_iter()
@@ -239,7 +291,6 @@ impl AgentCore {
             .collect()
     }
     
-    /// Get usage stats
     pub async fn get_usage_stats(&self) -> Usage {
         Usage {
             total_messages: 0,
@@ -247,7 +298,6 @@ impl AgentCore {
         }
     }
     
-    /// Get model name
     pub fn model_name(&self) -> &str {
         &self.config.agent.default_model
     }

@@ -191,7 +191,7 @@ impl LLMProvider for OpenAICompatibleProvider {
         Ok(CompletionResponse {
             content: completion.choices
                 .first()
-                .map(|c| c.message.content.clone())
+                .map(|c| c.message.content.clone().or(c.message.reasoning.clone()).unwrap_or_default())
                 .unwrap_or_default(),
             tool_calls: completion.choices
                 .first()
@@ -369,8 +369,9 @@ struct OpenAIChoice {
 
 #[derive(Debug, Deserialize)]
 struct OpenAIMessage {
-    content: String,
+    content: Option<String>,
     tool_calls: Option<Vec<ToolCall>>,
+    reasoning: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
