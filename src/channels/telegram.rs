@@ -365,9 +365,26 @@ async fn handle_message(
             .parse_mode(ParseMode::MarkdownV2)
             .await?;
     } else {
-        bot.send_message(ChatId(chat_id), markdown_to_telegram(&response))
+        // Try to send the message
+        let send_result = bot.send_message(ChatId(chat_id), markdown_to_telegram(&response))
             .parse_mode(ParseMode::MarkdownV2)
-            .await?;
+            .await;
+        
+        if send_result.is_err() {
+            let err_str = format!("{:?}", send_result);
+            // Check if message is too long
+            if err_str.contains("Message is too long") {
+                tracing::warn!("Response too long, splitting into chunks");
+                let chars: Vec<char> = response.chars().collect();
+                for chunk in chars.chunks(4000) {
+                    let chunk_str: String = chunk.iter().collect();
+                    let _ = bot.send_message(ChatId(chat_id), &chunk_str).await;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                }
+            } else {
+                tracing::warn!("Telegram send error: {:?}", send_result);
+            }
+        }
     }
 
     Ok(())
@@ -375,22 +392,16 @@ async fn handle_message(
 
 /// Escape text for MarkdownV2
 fn escape_md(text: &str) -> String {
-    text.replace('_', "\\_")
+    text.replace('\\', "\\\\")
+        .replace('_', "\\_")
         .replace('*', "\\*")
         .replace('[', "\\[")
         .replace(']', "\\]")
         .replace('(', "\\(")
         .replace(')', "\\)")
-        .replace('~', "\\~")
-        .replace('`', "\\`")
-        .replace('>', "\\>")
         .replace('#', "\\#")
         .replace('+', "\\+")
         .replace('-', "\\-")
-        .replace('=', "\\=")
-        .replace('|', "\\|")
-        .replace('{', "\\{")
-        .replace('}', "\\}")
         .replace('.', "\\.")
         .replace('!', "\\!")
 }
