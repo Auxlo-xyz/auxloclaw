@@ -1,23 +1,18 @@
-//! Tool Orchestrator with DAG-based Parallel Execution
-use anyhow::{anyhow, Result};
+//! Tool Orchestrator
+use anyhow::Result;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Tool trait
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     fn parameters(&self) -> serde_json::Value;
     async fn execute(&self, args: serde_json::Value) -> Result<ToolResult>;
-    fn dependencies(&self) -> Vec<String> { vec![] }
 }
 
-/// Tool result
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
     pub tool_name: String,
     pub success: bool,
@@ -26,67 +21,31 @@ pub struct ToolResult {
     pub duration_ms: u64,
 }
 
-/// Tool definition
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
-    #[serde(rename = "type")]
     pub tool_type: String,
     pub function: FunctionDef,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionDef {
     pub name: String,
     pub description: String,
     pub parameters: serde_json::Value,
 }
 
-/// DAG node
-#[derive(Debug, Clone)]
-pub struct ToolNode {
-    pub name: String,
-    pub args: serde_json::Value,
-    pub dependencies: HashSet<String>,
-    pub level: usize,
-}
-
-/// Tool orchestrator
 pub struct ToolOrchestrator {
     registry: DashMap<String, Arc<dyn Tool>>,
 }
 
 impl ToolOrchestrator {
     pub fn new() -> Self {
-        let orchestrator = Self {
-            registry: DashMap::new(),
-        };
-        
-        // Register built-in tools
-        orchestrator.register_builtin_tools();
-        orchestrator.register_web_tools();
-        
-        
-        orchestrator
+        let orch = Self { registry: DashMap::new() };
+        orch.register_builtin();
+        orch
     }
     
-    fn register_builtin_tools(&self) {
-        self.register(Arc::new(FileReadTool));
-        self.register(Arc::new(FileWriteTool));
-        self.register(Arc::new(ExecTool));
-    }
-
-    fn register_web_tools(&self) {
-        use crate::tools::web::*;
-        
-        self.register(Arc::new(WebSearchTool));
-        self.register(Arc::new(BrowserOpenTool));
-        self.register(Arc::new(BrowserSnapshotTool));
-        self.register(Arc::new(BrowserClickTool));
-        self.register(Arc::new(BrowserFillTool));
-        self.register(Arc::new(BrowserScreenshotTool));
-        self.register(Arc::new(BrowserGetTool));
-        self.register(Arc::new(BrowserCloseTool));
-        self.register(Arc::new(XFetchTool));
+    fn register_builtin(&self) {
+        self.register(Arc::new(ScriptTool));
+        self.register(Arc::new(ParallelTool));
     }
 
     pub fn register(&self, tool: Arc<dyn Tool>) {
@@ -94,180 +53,126 @@ impl ToolOrchestrator {
     }
 
     pub fn get_definitions(&self) -> Vec<ToolDefinition> {
-        self.registry
-            .iter()
-            .map(|t| ToolDefinition {
-                tool_type: "function".into(),
-                function: FunctionDef {
-                    name: t.name().to_string(),
-                    description: t.description().to_string(),
-                    parameters: t.parameters(),
-                },
-            })
-            .collect()
+        self.registry.iter().map(|t| ToolDefinition {
+            tool_type: "function".into(),
+            function: FunctionDef {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+                parameters: t.parameters(),
+            },
+        }).collect()
     }
 
-    pub async fn execute_parallel(&self, calls: Vec<(String, serde_json::Value)>) -> Vec<ToolResult> {
-        let dag = self.build_dag(&calls);
-        let mut all_results = vec![];
-        
-        for level in dag.levels() {
-            let level_nodes = dag.nodes_at_level(level);
-            let level_results: Vec<ToolResult> = futures::future::join_all(
-                level_nodes.into_iter().map(|node| self.execute_tool(node))
-            ).await;
-            all_results.extend(level_results);
-        }
-        all_results
-    }
-
-    async fn execute_tool(&self, node: ToolNode) -> ToolResult {
+    pub async fn execute_tool(&self, name: &str, args: serde_json::Value) -> ToolResult {
         let start = std::time::Instant::now();
-        
-        let result = if let Some(tool) = self.registry.get(&node.name) {
-            tool.execute(node.args).await
+        let result = if let Some(tool) = self.registry.get(name) {
+            tool.execute(args).await
         } else {
-            Err(anyhow!("Tool not found: {}", node.name))
+            Err(anyhow::anyhow!("Tool not found: {}", name))
         };
-
-        let success = result.is_ok();
-        let error = result.as_ref().err().map(|e| e.to_string());
-        let output = result.map(|r| r.output).unwrap_or(serde_json::Value::Null);
-
         ToolResult {
-            tool_name: node.name.clone(),
-            success,
-            output,
-            error,
+            tool_name: name.into(),
+            success: result.is_ok(),
+            output: result.as_ref().ok().map(|r| r.output.clone()).unwrap_or(serde_json::Value::Null),
+            error: result.as_ref().err().map(|e| e.to_string()),
             duration_ms: start.elapsed().as_millis() as u64,
         }
     }
+}
 
-    fn build_dag(&self, calls: &[(String, serde_json::Value)]) -> ExecutionDAG {
-        let mut dag = ExecutionDAG::new();
-        for (name, args) in calls {
-            dag.add_node(ToolNode {
-                name: name.clone(),
-                args: args.clone(),
-                dependencies: HashSet::new(),
-                level: 0,
-            });
+pub struct ScriptTool;
+#[async_trait]
+impl Tool for ScriptTool {
+    fn name(&self) -> &str { "execute_script" }
+    fn description(&self) -> &str { "Execute Python/TypeScript/Bash scripts" }
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "language": {"type": "string", "enum": ["python", "typescript", "shell"]},
+                "code": {"type": "string"}
+            },
+            "required": ["language", "code"]
+        })
+    }
+    async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
+        let lang = args["language"].as_str().unwrap_or("shell");
+        let code = args["code"].as_str().unwrap_or("");
+        let ext = match lang { "python" => "py", "typescript" => "ts", _ => "sh" };
+        let tmp = std::env::temp_dir().join(format!("script.{}", ext));
+        tokio::fs::write(&tmp, code).await?;
+        let runner = match lang {
+            "python" => format!("python3 {}", tmp.display()),
+            "typescript" => format!("bun {}", tmp.display()),
+            _ => format!("sh {}", tmp.display()),
+        };
+        let output = tokio::process::Command::new("sh").arg("-c").arg(&runner).output().await;
+        let _ = tokio::fs::remove_file(&tmp).await;
+        match output {
+            Ok(o) => Ok(ToolResult {
+                tool_name: self.name().into(),
+                success: o.status.success(),
+                output: serde_json::json!({
+                    "stdout": String::from_utf8_lossy(&o.stdout),
+                    "stderr": String::from_utf8_lossy(&o.stderr)
+                }),
+                error: None,
+                duration_ms: 0,
+            }),
+            Err(e) => Ok(ToolResult {
+                tool_name: self.name().into(),
+                success: false,
+                output: serde_json::Value::Null,
+                error: Some(e.to_string()),
+                duration_ms: 0,
+            }),
         }
-        dag.compute_levels();
-        dag
     }
 }
 
-/// Execution DAG
-pub struct ExecutionDAG {
-    nodes: HashMap<String, ToolNode>,
-}
-
-impl ExecutionDAG {
-    fn new() -> Self {
-        Self { nodes: HashMap::new() }
+pub struct ParallelTool;
+#[async_trait]
+impl Tool for ParallelTool {
+    fn name(&self) -> &str { "execute_parallel" }
+    fn description(&self) -> &str { "Execute multiple commands in parallel" }
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "commands": {
+                    "type": "array",
+                    "items": {"type": "string"}
+                }
+            },
+            "required": ["commands"]
+        })
     }
-
-    fn add_node(&mut self, node: ToolNode) {
-        let name = node.name.clone();
-        self.nodes.insert(name, node);
-    }
-
-    fn compute_levels(&mut self) {
-        let names: Vec<String> = self.nodes.keys().cloned().collect();
-        let mut levels: HashMap<String, usize> = HashMap::new();
-        
-        for name in &names {
-            let level = self.compute_level_recursive(name, &mut levels);
-            if let Some(node) = self.nodes.get_mut(name) {
-                node.level = level;
+    async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
+        let cmds: Vec<String> = serde_json::from_value(args["commands"].clone()).unwrap_or_default();
+        let handles: Vec<_> = cmds.iter().map(|c| {
+            let cmd = c.clone();
+            tokio::spawn(async move {
+                tokio::process::Command::new("sh").arg("-c").arg(&cmd).output().await
+            })
+        }).collect();
+        let mut results = Vec::new();
+        for h in handles {
+            match h.await {
+                Ok(Ok(o)) => results.push(serde_json::json!({
+                    "success": o.status.success(),
+                    "stdout": String::from_utf8_lossy(&o.stdout),
+                    "stderr": String::from_utf8_lossy(&o.stderr)
+                })),
+                _ => results.push(serde_json::json!({
+                    "success": false,
+                    "error": "execution failed"
+                })),
             }
         }
-    }
-
-    fn compute_level_recursive(&self, name: &str, levels: &mut HashMap<String, usize>) -> usize {
-        if let Some(&level) = levels.get(name) {
-            return level;
-        }
-        let deps = self.nodes.get(name).map(|n| n.dependencies.clone()).unwrap_or_default();
-        let max_dep = deps.iter().map(|d| self.compute_level_recursive(d, levels)).max().unwrap_or(0);
-        let level = max_dep + 1;
-        levels.insert(name.to_string(), level);
-        level
-    }
-
-    fn levels(&self) -> Vec<usize> {
-        let mut levels: Vec<usize> = self.nodes.values().map(|n| n.level).collect();
-        levels.sort();
-        levels.dedup();
-        levels
-    }
-
-    fn nodes_at_level(&self, level: usize) -> Vec<ToolNode> {
-        self.nodes.values().filter(|n| n.level == level).cloned().collect()
-    }
-}
-
-// Built-in tools
-
-pub struct FileReadTool;
-#[async_trait]
-impl Tool for FileReadTool {
-    fn name(&self) -> &str { "file_read" }
-    fn description(&self) -> &str { "Read a file" }
-    fn parameters(&self) -> serde_json::Value {
-        serde_json::json!({"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]})
-    }
-    async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
-        let path = args["path"].as_str().ok_or_else(|| anyhow!("Missing path"))?;
-        let content = tokio::fs::read_to_string(path).await?;
         Ok(ToolResult {
             tool_name: self.name().into(),
             success: true,
-            output: serde_json::json!({"content": content}),
-            error: None,
-            duration_ms: 0,
-        })
-    }
-}
-
-pub struct FileWriteTool;
-#[async_trait]
-impl Tool for FileWriteTool {
-    fn name(&self) -> &str { "file_write" }
-    fn description(&self) -> &str { "Write a file" }
-    fn parameters(&self) -> serde_json::Value {
-        serde_json::json!({"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]})
-    }
-    async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
-        let path = args["path"].as_str().ok_or_else(|| anyhow!("Missing path"))?;
-        let content = args["content"].as_str().ok_or_else(|| anyhow!("Missing content"))?;
-        tokio::fs::write(path, content).await?;
-        Ok(ToolResult {
-            tool_name: self.name().into(),
-            success: true,
-            output: serde_json::json!({"written": true}),
-            error: None,
-            duration_ms: 0,
-        })
-    }
-}
-
-pub struct ExecTool;
-#[async_trait]
-impl Tool for ExecTool {
-    fn name(&self) -> &str { "execute" }
-    fn description(&self) -> &str { "Execute a shell command" }
-    fn parameters(&self) -> serde_json::Value {
-        serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]})
-    }
-    async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
-        let cmd = args["command"].as_str().ok_or_else(|| anyhow!("Missing command"))?;
-        let output = tokio::process::Command::new("sh").arg("-c").arg(cmd).output().await?;
-        Ok(ToolResult {
-            tool_name: self.name().into(),
-            success: output.status.success(),
-            output: serde_json::json!({"stdout": String::from_utf8_lossy(&output.stdout), "stderr": String::from_utf8_lossy(&output.stderr)}),
+            output: serde_json::json!({ "results": results }),
             error: None,
             duration_ms: 0,
         })

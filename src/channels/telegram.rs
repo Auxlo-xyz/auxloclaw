@@ -195,8 +195,9 @@ async fn handle_command(
         }
 
         Command::Clear => {
-            state.clear_session(chat_id).await;
-            let _ = state.agent.clear_session(&format!("tg:{}", chat_id)).await;
+            let session_id = format!("tg:{}", chat_id);
+            state.agent.clear_session(&session_id).await;
+            state.sessions.write().await.remove(&chat_id);
             "🗑️ *Session Cleared*\n\nYour conversation history has been reset\\. Starting fresh!".to_string()
         }
 
@@ -319,8 +320,9 @@ async fn handle_command(
         }
 
         Command::New => {
+            let session_id = format!("tg:{}", chat_id);
+            state.agent.clear_session(&session_id).await;
             state.clear_session(chat_id).await;
-            let _ = state.agent.new_session(&format!("tg:{}", chat_id)).await;
             "🆕 *New Session Started*\n\nPrevious context cleared\\. I'm ready for a fresh conversation\\!\n\n_What would you like to discuss?_".to_string()
         }
     };

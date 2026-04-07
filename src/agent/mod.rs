@@ -1,4 +1,4 @@
-//! Agent Core - Central orchestration with tool execution loop
+//! Agent Core - Central processing unit for the agent framework
 
 use anyhow::Result;
 use std::sync::Arc;
@@ -32,7 +32,7 @@ pub struct AgentCore {
     orchestrator: Arc<ToolOrchestrator>,
     persona: PersonaConfig,
     usage: std::sync::atomic::AtomicU64,
-    sessions: RwLock<HashMap<String, SessionHistory>>,
+    pub sessions: RwLock<HashMap<String, SessionHistory>>,
     session_store: Arc<SessionStore>,
 }
 
@@ -172,18 +172,12 @@ impl AgentCore {
         tracing::info!(" Executing tool: {} with args: {}", tool_call.function.name, args);
         
         // Execute via orchestrator
-        let results = self.orchestrator.execute_parallel(vec![
-            (tool_call.function.name.clone(), args)
-        ]).await;
+        let result = self.orchestrator.execute_tool(&tool_call.function.name, args).await;
         
-        if let Some(result) = results.first() {
-            if result.success {
-                serde_json::to_string(&result.output).unwrap_or_else(|_| result.output.to_string())
-            } else {
-                format!("Tool error: {}", result.error.as_ref().unwrap_or(&"Unknown error".into()))
-            }
+        if result.success {
+            serde_json::to_string(&result.output).unwrap_or_else(|_| result.output.to_string())
         } else {
-            "Tool not found".into()
+            format!("Tool error: {}", result.error.as_ref().unwrap_or(&"Unknown error".into()))
         }
     }
     
@@ -261,12 +255,17 @@ impl AgentCore {
         summary
     }
     
-    pub async fn clear_session(&self, session_id: &str) -> Result<()> {
-        let mut sessions = self.sessions.write().await;
-        sessions.remove(session_id);
-        drop(sessions);
-        self.session_store.delete(session_id)?;
-        Ok(())
+    /// Clear a session from memory and disk
+    pub async fn clear_session(&self, session_id: &str) {
+        // Remove from in-memory sessions
+        self.sessions.write().await.remove(session_id);
+        
+        // Delete from disk
+        if let Err(e) = self.session_store.delete(session_id) {
+            tracing::warn!("Failed to delete session file: {}", e);
+        }
+        
+        tracing::info!("Cleared session: {}", session_id);
     }
     
     pub async fn recover_session(&self, _session_id: &str) -> Result<()> {
@@ -276,8 +275,9 @@ impl AgentCore {
     pub async fn new_session(&self, session_id: &str) -> Result<()> {
         let mut sessions = self.sessions.write().await;
         sessions.insert(session_id.to_string(), SessionHistory::new(session_id));
+        let session = sessions.get(session_id).cloned().unwrap();
         drop(sessions);
-        self.session_store.save(session_id, &SessionHistory::new(session_id))?;
+        self.session_store.save(session_id, &session)?;
         Ok(())
     }
     
