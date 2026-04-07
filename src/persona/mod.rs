@@ -238,8 +238,24 @@ impl SystemPromptBuilder {
                 desc.push_str(&self.format_tool_with_usage(tool));
             }
             
+            desc.push_str("\n### Code Execution\n");
+            for tool in tools.iter().filter(|t| ["execute_code", "execute_parallel", "execute_script"].contains(&t.function.name.as_str())) {
+                desc.push_str(&self.format_tool_with_usage(tool));
+            }
+            
             desc.push_str("\n### Memory\n");
             for tool in tools.iter().filter(|t| t.function.name == "memory") {
+                desc.push_str(&self.format_tool_with_usage(tool));
+            }
+            
+            desc.push_str("\n### Other Tools\n");
+            for tool in tools.iter().filter(|t| {
+                !t.function.name.starts_with("file")
+                && !["web_search", "web_fetch", "x_fetch"].contains(&t.function.name.as_str())
+                && !t.function.name.starts_with("browser")
+                && !["execute", "execute_code", "execute_parallel", "execute_script"].contains(&t.function.name.as_str())
+                && t.function.name != "memory"
+            }) {
                 desc.push_str(&self.format_tool_with_usage(tool));
             }
             
@@ -255,7 +271,7 @@ impl SystemPromptBuilder {
         desc.push_str("- **Fill out forms** on websites and interact with UI elements\n");
         desc.push_str("- **Create accounts** on websites that do not require phone/SMS verification\n");
         desc.push_str("- **Make authenticated requests** if given credentials or tokens\n");
-        desc.push_str("- **Execute shell commands** on this machine\n");
+        desc.push_str("- **Execute code** using the execute_code tool (Python, TypeScript, Shell)\n");
         desc.push_str("- **Read and write files** anywhere on the system\n");
         desc.push_str("- **Search the web** for current information\n");
         desc.push_str("- **Fetch tweets** from X/Twitter by ID\n\n");
@@ -333,6 +349,12 @@ impl SystemPromptBuilder {
                 formatted.push_str("  - Returns stdout, stderr, and exit code\n");
                 formatted.push_str("  - Use for system operations, scripts, or file manipulation\n");
             }
+            "execute_code" => {
+                formatted.push_str("  Usage: {\"tool\": \"execute_code\", \"arguments\": {\"language\": \"python\", \"code\": \"print('Hello, world!')\"}}\n");
+                formatted.push_str("  - Executes code in a specified language\n");
+                formatted.push_str("  - Returns stdout, stderr, and exit code\n");
+                formatted.push_str("  - Use for running scripts, calculations, or data processing\n");
+            }
             "memory" => {
                 formatted.push_str("  Usage: {\"tool\": \"memory\", \"arguments\": {\"action\": \"store\", \"key\": \"name\", \"value\": \"value\"}}\n");
                 formatted.push_str("  - Store: {\"action\": \"store\", \"key\": \"...\", \"value\": \"...\"}\n");
@@ -374,15 +396,11 @@ impl SystemPromptBuilder {
         
         // Style rules (derived from config)
         prompt.push_str(&self.build_style_rules());
-        prompt.push_str("
-
-");
+        prompt.push_str("\n");
         
         // Agent principles (always injected)
         prompt.push_str(&self.build_agent_principles());
-        prompt.push_str("
-
-");
+        prompt.push_str("\n");
         
         // Tools (injected)
         if !self.tools_description.is_empty() {

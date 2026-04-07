@@ -147,7 +147,11 @@ impl ExecuteCodeTool {
         code: &str,
     ) -> Result<ExecutionResult> {
         // Validate
-        self.validate(code, lang)?;
+        tracing::debug!("execute_code: lang={}, code_len={}", lang, code.len());
+        if let Err(e) = self.validate(code, lang) {
+            tracing::warn!("Validation failed: {}", e);
+            return Err(e);
+        }
 
         // Write to temp file
         let ext = match lang {
