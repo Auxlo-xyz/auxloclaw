@@ -172,7 +172,10 @@ impl LLMProvider for OpenAICompatibleProvider {
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
         let url = format!("{}/chat/completions", self.api_base);
         
+        tracing::debug!("Provider: {} | Model: {}", self.name, request.model);
+        
         let body = serde_json::to_value(&request)?;
+        tracing::debug!("Request body: {}", serde_json::to_string_pretty(&body)?);
         
         let response = self.client
             .post(&url)
@@ -181,8 +184,12 @@ impl LLMProvider for OpenAICompatibleProvider {
             .send()
             .await?;
 
-        if !response.status().is_success() {
+        let status = response.status();
+        tracing::debug!("Response status: {}", status);
+        
+        if !status.is_success() {
             let error = response.text().await?;
+            tracing::error!("API error: {}", error);
             return Err(anyhow!("API error: {}", error));
         }
 

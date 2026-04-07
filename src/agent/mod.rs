@@ -123,6 +123,8 @@ impl AgentCore {
                     // Check if there are tool calls
                     if let Some(tool_calls) = &response.tool_calls {
                         if !tool_calls.is_empty() {
+                            tracing::debug!("Model returned {} tool_calls", tool_calls.len());
+                            
                             // Add assistant message with tool calls
                             messages.push(Message {
                                 role: "assistant".into(),
@@ -137,11 +139,12 @@ impl AgentCore {
                                 // Add tool result as a message
                                 messages.push(Message {
                                     role: "tool".into(),
-                                    content: result,
+                                    content: result.clone(),
                                     tool_calls: None,
                                 });
                             }
                             
+                            tracing::debug!("Continuing loop with {} messages", messages.len());
                             // Continue loop to get next response
                             continue;
                         }
@@ -152,6 +155,7 @@ impl AgentCore {
                     break;
                 }
                 Err(e) => {
+                    tracing::error!("Provider error: {}", e);
                     final_response = format!("Error: {}", e);
                     break;
                 }

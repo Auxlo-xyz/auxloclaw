@@ -46,7 +46,22 @@ impl ToolOrchestrator {
     fn register_builtin(&self) {
         use crate::tools::ExecuteCodeTool;
         self.register(Arc::new(ExecuteCodeTool::new()));
-        // ExecuteParallelTool can be added later when needed
+        
+        // Register web tools
+        use crate::tools::web::{
+            WebSearchTool, BrowserOpenTool, BrowserSnapshotTool,
+            BrowserClickTool, BrowserFillTool, BrowserScreenshotTool,
+            BrowserGetTool, BrowserCloseTool, XFetchTool
+        };
+        self.register(Arc::new(WebSearchTool));
+        self.register(Arc::new(BrowserOpenTool));
+        self.register(Arc::new(BrowserSnapshotTool));
+        self.register(Arc::new(BrowserClickTool));
+        self.register(Arc::new(BrowserFillTool));
+        self.register(Arc::new(BrowserScreenshotTool));
+        self.register(Arc::new(BrowserGetTool));
+        self.register(Arc::new(BrowserCloseTool));
+        self.register(Arc::new(XFetchTool));
     }
 
     pub fn register(&self, tool: Arc<dyn Tool>) {
