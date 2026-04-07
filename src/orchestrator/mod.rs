@@ -44,8 +44,9 @@ impl ToolOrchestrator {
     }
     
     fn register_builtin(&self) {
-        self.register(Arc::new(ScriptTool));
-        self.register(Arc::new(ParallelTool));
+        use crate::tools::ExecuteCodeTool;
+        self.register(Arc::new(ExecuteCodeTool::new()));
+        // ExecuteParallelTool can be added later when needed
     }
 
     pub fn register(&self, tool: Arc<dyn Tool>) {
@@ -77,104 +78,5 @@ impl ToolOrchestrator {
             error: result.as_ref().err().map(|e| e.to_string()),
             duration_ms: start.elapsed().as_millis() as u64,
         }
-    }
-}
-
-pub struct ScriptTool;
-#[async_trait]
-impl Tool for ScriptTool {
-    fn name(&self) -> &str { "execute_script" }
-    fn description(&self) -> &str { "Execute Python/TypeScript/Bash scripts" }
-    fn parameters(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "language": {"type": "string", "enum": ["python", "typescript", "shell"]},
-                "code": {"type": "string"}
-            },
-            "required": ["language", "code"]
-        })
-    }
-    async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
-        let lang = args["language"].as_str().unwrap_or("shell");
-        let code = args["code"].as_str().unwrap_or("");
-        let ext = match lang { "python" => "py", "typescript" => "ts", _ => "sh" };
-        let tmp = std::env::temp_dir().join(format!("script.{}", ext));
-        tokio::fs::write(&tmp, code).await?;
-        let runner = match lang {
-            "python" => format!("python3 {}", tmp.display()),
-            "typescript" => format!("bun {}", tmp.display()),
-            _ => format!("sh {}", tmp.display()),
-        };
-        let output = tokio::process::Command::new("sh").arg("-c").arg(&runner).output().await;
-        let _ = tokio::fs::remove_file(&tmp).await;
-        match output {
-            Ok(o) => Ok(ToolResult {
-                tool_name: self.name().into(),
-                success: o.status.success(),
-                output: serde_json::json!({
-                    "stdout": String::from_utf8_lossy(&o.stdout),
-                    "stderr": String::from_utf8_lossy(&o.stderr)
-                }),
-                error: None,
-                duration_ms: 0,
-            }),
-            Err(e) => Ok(ToolResult {
-                tool_name: self.name().into(),
-                success: false,
-                output: serde_json::Value::Null,
-                error: Some(e.to_string()),
-                duration_ms: 0,
-            }),
-        }
-    }
-}
-
-pub struct ParallelTool;
-#[async_trait]
-impl Tool for ParallelTool {
-    fn name(&self) -> &str { "execute_parallel" }
-    fn description(&self) -> &str { "Execute multiple commands in parallel" }
-    fn parameters(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "commands": {
-                    "type": "array",
-                    "items": {"type": "string"}
-                }
-            },
-            "required": ["commands"]
-        })
-    }
-    async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
-        let cmds: Vec<String> = serde_json::from_value(args["commands"].clone()).unwrap_or_default();
-        let handles: Vec<_> = cmds.iter().map(|c| {
-            let cmd = c.clone();
-            tokio::spawn(async move {
-                tokio::process::Command::new("sh").arg("-c").arg(&cmd).output().await
-            })
-        }).collect();
-        let mut results = Vec::new();
-        for h in handles {
-            match h.await {
-                Ok(Ok(o)) => results.push(serde_json::json!({
-                    "success": o.status.success(),
-                    "stdout": String::from_utf8_lossy(&o.stdout),
-                    "stderr": String::from_utf8_lossy(&o.stderr)
-                })),
-                _ => results.push(serde_json::json!({
-                    "success": false,
-                    "error": "execution failed"
-                })),
-            }
-        }
-        Ok(ToolResult {
-            tool_name: self.name().into(),
-            success: true,
-            output: serde_json::json!({ "results": results }),
-            error: None,
-            duration_ms: 0,
-        })
     }
 }

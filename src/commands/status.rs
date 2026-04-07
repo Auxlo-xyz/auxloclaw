@@ -71,17 +71,12 @@ pub fn handle_status() -> Result<()> {
         println!("  No running instances");
     }
     
-    // Network
+    // Network - use std net instead of blocking reqwest
     println!("\n🌐 Network");
-    let client = reqwest::blocking::Client::new();
-    if let Ok(response) = client.get("http://localhost:18789/health").send() {
-        if response.status().is_success() {
-            println!("  Gateway: ✓ (port 18789)");
-        } else {
-            println!("  Gateway: ✗ (error {})", response.status());
-        }
-    } else {
-        println!("  Gateway: not running");
+    use std::net::TcpStream;
+    match TcpStream::connect("127.0.0.1:18789") {
+        Ok(_) => println!("  Gateway: ✓ (port 18789)"),
+        Err(_) => println!("  Gateway: not running"),
     }
     
     println!();

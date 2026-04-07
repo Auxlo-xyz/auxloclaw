@@ -122,7 +122,7 @@ pub enum SkillCommands {
     /// List installed skills
     List {
         /// Show detailed info
-        #[arg(short, long)]
+        #[arg(short = 'l', long)]
         detailed: bool,
     },
 
@@ -158,7 +158,7 @@ pub enum SkillCommands {
         name: String,
         
         /// Description
-        #[arg(short, long)]
+        #[arg(short = 't', long)]
         description: Option<String>,
     },
 
