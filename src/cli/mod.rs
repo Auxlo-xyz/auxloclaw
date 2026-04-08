@@ -77,6 +77,20 @@ pub enum Commands {
     },
     /// Stop the gateway server
     Stop,
+
+    /// Manage WhatsApp integration
+    WhatsApp {
+        #[command(subcommand)]
+        action: WhatsAppCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum WhatsAppCommands {
+    /// Request a pairing code to link your device
+    Pair,
+    /// Check connection status
+    Status,
 }
 
 #[derive(Subcommand)]

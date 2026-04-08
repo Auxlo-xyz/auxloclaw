@@ -1,5 +1,5 @@
 
-import { serve } from "hono";
+import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { WhatsAppIntegration } from "./index";
 
@@ -18,8 +18,6 @@ wa.onMessage(async (msg) => {
   const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
   if (!text) return;
 
-  console.log(`Forwarding message from ${msg.pushName} (${msg.key.remoteJid}) to gateway...`);
-  
   try {
     await fetch(`${GATEWAY_URL}/api/whatsapp/message`, {
       method: "POST",
@@ -30,40 +28,42 @@ wa.onMessage(async (msg) => {
         text: text,
       }),
     });
-  } catch (error) {
-    console.error("Failed to forward message to gateway:", error);
+  } catch (e) {
+    console.error("Failed to forward message to gateway:", e);
   }
 });
 
-// API Endpoints
+// Endpoint to send messages from Rust gateway
 app.post("/send", async (c) => {
   const { jid, text } = await c.req.json();
   try {
     await wa.sendMessage(jid, text);
-    return c.json({ success: true });
-  } catch (error: any) {
-    return c.json({ success: false, error: error.message }, 500);
+    return c.json({ status: "ok" });
+  } catch (e: any) {
+    return c.json({ status: "error", message: e.message }, 500);
   }
 });
 
-app.post("/pairing-code", async (c) => {
-  const { phoneNumber } = await c.req.json();
+// Endpoint to request pairing code
+app.get("/pairing-code", async (c) => {
+  const phone = c.req.query("phone");
+  if (!phone) return c.json({ error: "Phone number required" }, 400);
+
   try {
-    const code = await wa.requestPairingCode(phoneNumber);
+    const code = await wa.requestPairingCode(phone);
     return c.json({ code });
-  } catch (error: any) {
-    return c.json({ error: error.message }, 500);
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500);
   }
 });
 
-app.get("/status", (c) => {
-  return c.json(wa.getState());
+// Endpoint for status checks
+app.get("/status", async (c) => {
+  return c.json({ connected: wa.isRegistered() });
 });
 
-const port = 18790;
-console.log(`🚀 WhatsApp Bridge listening on port ${port}`);
-console.log(`🔗 Gateway URL: ${GATEWAY_URL}`);
+console.log("WhatsApp Bridge listening on port 18790");
 serve({
   fetch: app.fetch,
-  port: port,
+  port: 18790,
 });

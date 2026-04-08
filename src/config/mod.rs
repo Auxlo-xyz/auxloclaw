@@ -117,6 +117,15 @@ pub struct ChannelsConfig {
     pub telegram: TelegramConfig,
     pub discord: DiscordConfig,
     pub slack: SlackConfig,
+    pub whatsapp: WhatsAppConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
+pub struct WhatsAppConfig {
+    pub enabled: bool,
+    pub phone_number: String,
+    pub auth_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -262,6 +271,12 @@ impl AppConfig {
         if let Ok(token) = std::env::var("DISCORD_BOT_TOKEN") {
             self.channels.discord.token = token.clone();
             self.channels.discord.enabled = !token.is_empty();
+        }
+
+        // WhatsApp phone number from env
+        if let Ok(phone) = std::env::var("WHATSAPP_PHONE_NUMBER") {
+            self.channels.whatsapp.phone_number = phone.clone();
+            self.channels.whatsapp.enabled = !phone.is_empty();
         }
 
         // Memory database path

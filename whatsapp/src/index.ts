@@ -108,6 +108,17 @@ export class WhatsAppIntegration {
   }
 
   /**
+   * New endpoint for the Rust core to request a pairing code
+   */
+  async handlePairingRequest(phoneNumber: string): Promise<string> {
+    if (!this.sock) {
+      // If not connected, try to initialize
+      await this.connect();
+    }
+    return this.requestPairingCode(phoneNumber);
+  }
+
+  /**
    * Connect and request pairing code in sequence
    */
   async connectWithPairing(phoneNumber: string): Promise<string> {
