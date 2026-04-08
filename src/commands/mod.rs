@@ -9,7 +9,6 @@ pub mod persona;
 pub mod status;
 pub mod run;
 pub mod stop;
-pub mod whatsapp;
 
 pub use setup::handle_setup;
 pub use chat::handle_chat;
@@ -20,4 +19,3 @@ pub use persona::handle_persona;
 pub use status::handle_status;
 pub use run::handle_run;
 pub use stop::handle_stop;
-pub use whatsapp::handle_whatsapp;

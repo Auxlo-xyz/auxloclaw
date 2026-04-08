@@ -24,13 +24,6 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 use cli::{Cli, Commands};
-use crate::channels::whatsapp::WhatsAppState;
-
-#[derive(Clone)]
-struct GatewayState {
-    agent: Arc<agent::AgentCore>,
-    whatsapp: Arc<WhatsAppState>,
-}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -83,10 +76,6 @@ async fn main() -> anyhow::Result<()> {
         Commands::Stop => {
             commands::stop::handle_stop()?;
         }
-        
-        Commands::WhatsApp { action } => {
-            commands::whatsapp::handle_whatsapp(action).await?;
-        }
     }
     
     Ok(())
@@ -127,30 +116,8 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     
     info!("⚡ Core initialized in {:?}", start.elapsed());
     
-    // Initialize WhatsApp bridge if enabled
-    let wa_state = if config.channels.whatsapp.enabled {
-        let wa_url = "http://localhost:18790".to_string();
-        let wa_phone = config.channels.whatsapp.phone_number.clone();
-        let wa_auth_dir = config.channels.whatsapp.auth_dir.clone().unwrap_or_else(|| "./auth_whatsapp".into());
-        
-        tracing::info!("📱 Starting WhatsApp bridge for {}...", wa_phone);
-        
-        // Spawn the Bun process as a sidecar
-        let _ = std::process::Command::new("bun")
-            .arg("run")
-            .arg("index.ts")
-            .current_dir("/home/workspace/auxloclaw/whatsapp")
-            .env("WHATSAPP_AUTH_DIR", wa_auth_dir)
-            .spawn();
-        
-        let whatsapp_state = Arc::new(WhatsAppState::new(agent.clone(), wa_url));
-        Some(whatsapp_state)
-    } else {
-        None
-    };
-    
     // Start Telegram channel if enabled
-    let tg_handle = if config.channels.telegram.enabled {
+    let _tg_handle = if config.channels.telegram.enabled {
         let tg_agent = agent.clone();
         let tg_config = config.channels.telegram.clone();
         let tg_persona = config.persona.clone();
@@ -169,15 +136,11 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
         .route("/health", axum::routing::get(|| async { "OK" }))
         .route("/chat", axum::routing::post(chat_handler))
         .route("/api/chat", axum::routing::post(chat_handler))
-        .route("/api/whatsapp/message", axum::routing::post(whatsapp_message_handler))
         .route("/api/status", axum::routing::get(status_handler))
         .route("/api/skills", axum::routing::get(list_skills_handler))
         .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
         .layer(TraceLayer::new_for_http())
-        .with_state(GatewayState {
-            agent: agent.clone(),
-            whatsapp: wa_state.unwrap_or_else(|| Arc::new(channels::whatsapp::WhatsAppState::new(agent.clone(), "http://localhost:18790".into()))),
-        });
+        .with_state(agent.clone());
     
     // Start server
     let addr = format!("{}:{}", host, port);
@@ -203,32 +166,12 @@ struct ChatResponse {
     response: String,
 }
 
-#[derive(Deserialize)]
-struct WhatsAppMessageRequest {
-    jid: String,
-    pushName: String,
-    text: String,
-}
-
 async fn chat_handler(
-    axum::extract::State(state): axum::extract::State<GatewayState>,
+    axum::extract::State(agent): axum::extract::State<Arc<agent::AgentCore>>,
     axum::Json(req): axum::Json<ChatRequest>,
 ) -> axum::Json<ChatResponse> {
-    let response = state.agent.process(&req.message, None).await;
+    let response = agent.process(&req.message, None).await;
     axum::Json(ChatResponse { response })
-}
-
-async fn whatsapp_message_handler(
-    axum::extract::State(state): axum::extract::State<GatewayState>,
-    axum::Json(req): axum::Json<WhatsAppMessageRequest>,
-) -> axum::Json<serde_json::Value> {
-    let res = state.whatsapp.handle_message(&req.jid, &req.pushName, &req.text).await;
-    
-    if res.is_ok() {
-        axum::Json(serde_json::json!({ "status": "ok" }))
-    } else {
-        axum::Json(serde_json::json!({ "status": "error", "message": format!("{:?}", res.err()) }))
-    }
 }
 
 async fn status_handler() -> axum::Json<serde_json::Value> {
@@ -240,7 +183,6 @@ async fn status_handler() -> axum::Json<serde_json::Value> {
 }
 
 async fn list_skills_handler() -> axum::Json<Vec<String>> {
-    // Return list of available skills
     axum::Json(vec![
         "code-review".into(),
         "arxiv".into(),
