@@ -2,6 +2,7 @@
 
 pub mod telegram;
 pub mod discord;
+pub mod whatsapp;
 
 // Re-export channel traits
 use async_trait::async_trait;

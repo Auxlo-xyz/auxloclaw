@@ -68,9 +68,9 @@ impl AgentCore {
     }
 
     /// Process a message with tool execution loop
-    pub async fn process(&self, message: &str, session_id: Option<i64>) -> String {
+    pub async fn process(&self, message: &str, session_id: Option<&str>) -> String {
         let session_key = session_id
-            .map(|id| format!("tg:{}", id))
+            .map(|id| id.to_string())
             .unwrap_or_else(|| "default".to_string());
         
         // Get history
