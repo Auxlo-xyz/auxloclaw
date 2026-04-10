@@ -117,15 +117,6 @@ pub struct ChannelsConfig {
     pub telegram: TelegramConfig,
     pub discord: DiscordConfig,
     pub slack: SlackConfig,
-    pub whatsapp: WhatsAppConfig,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-#[serde(default)]
-pub struct WhatsAppConfig {
-    pub enabled: bool,
-    pub phone_number: String,
-    pub auth_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -240,43 +231,40 @@ impl AppConfig {
     }
 
     fn with_env_overrides(mut self) -> Self {
-        // Provider API keys from environment
-        if let Ok(key) = std::env::var("NVIDIA_API_KEY") {
-            self.providers.primary.api_key = key;
-            self.providers.primary.name = "nvidia".into();
-            self.providers.primary.api_base = "https://integrate.api.nvidia.com/v1".into();
-        }
-        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-            if self.providers.primary.api_key.is_empty() {
+        // Only apply env overrides if the primary key is not already set
+        // This allows config.toml to take precedence
+        if self.providers.primary.api_key.is_empty() {
+            if let Ok(key) = std::env::var("NVIDIA_API_KEY") {
+                self.providers.primary.api_key = key;
+                self.providers.primary.name = "nvidia".into();
+                self.providers.primary.api_base = "https://integrate.api.nvidia.com/v1".into();
+            }
+            if let Ok(key) = std::env::var("OPENAI_API_KEY") {
                 self.providers.primary.api_key = key;
                 self.providers.primary.name = "openai".into();
                 self.providers.primary.api_base = "https://api.openai.com/v1".into();
             }
-        }
-        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-            if self.providers.primary.api_key.is_empty() {
+            if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
                 self.providers.primary.api_key = key;
                 self.providers.primary.name = "anthropic".into();
                 self.providers.primary.api_base = "https://api.anthropic.com/v1".into();
             }
         }
 
-        // Telegram token from env
-        if let Ok(token) = std::env::var("TELEGRAM_BOT_TOKEN") {
-            self.channels.telegram.token = token.clone();
-            self.channels.telegram.enabled = !token.is_empty();
+        // Telegram token from env (only if not set in config)
+        if self.channels.telegram.token.is_empty() {
+            if let Ok(token) = std::env::var("TELEGRAM_BOT_TOKEN") {
+                self.channels.telegram.token = token.clone();
+                self.channels.telegram.enabled = !token.is_empty();
+            }
         }
 
-        // Discord token from env
-        if let Ok(token) = std::env::var("DISCORD_BOT_TOKEN") {
-            self.channels.discord.token = token.clone();
-            self.channels.discord.enabled = !token.is_empty();
-        }
-
-        // WhatsApp phone number from env
-        if let Ok(phone) = std::env::var("WHATSAPP_PHONE_NUMBER") {
-            self.channels.whatsapp.phone_number = phone.clone();
-            self.channels.whatsapp.enabled = !phone.is_empty();
+        // Discord token from env (only if not set in config)
+        if self.channels.discord.token.is_empty() {
+            if let Ok(token) = std::env::var("DISCORD_BOT_TOKEN") {
+                self.channels.discord.token = token.clone();
+                self.channels.discord.enabled = !token.is_empty();
+            }
         }
 
         // Memory database path
