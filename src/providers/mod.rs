@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::time;
 
 use crate::config::{ProviderEntry, ProvidersConfig};
 
@@ -85,10 +86,23 @@ impl ProviderPool {
     }
 
     pub async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
-        // Try primary first
-        match self.primary.complete(request.clone()).await {
-            Ok(response) => return Ok(response),
-            Err(e) => tracing::warn!("Primary provider failed: {}, trying fallbacks", e),
+        const MAX_RETRIES: u32 = 3;
+        const BASE_DELAY_MS: u64 = 1000;
+
+        // Try primary with retries
+        for attempt in 0..MAX_RETRIES {
+            match self.primary.complete(request.clone()).await {
+                Ok(response) => return Ok(response),
+                Err(e) => {
+                    if attempt < MAX_RETRIES - 1 {
+                        let delay_ms = BASE_DELAY_MS * 2u64.pow(attempt);
+                        tracing::warn!("Provider failed (attempt {}), retrying in {}ms: {}", attempt + 1, delay_ms, e);
+                        time::sleep(Duration::from_millis(delay_ms)).await;
+                    } else {
+                        tracing::warn!("Primary provider failed after {} attempts: {}", MAX_RETRIES, e);
+                    }
+                }
+            }
         }
 
         // Try fallbacks
