@@ -232,6 +232,13 @@ impl LLMProvider for OpenAICompatibleProvider {
 
         let completion: OpenAICompletion = response.json().await?;
         
+        // Check if Google returned an error in the response body
+        if let Some(err) = completion.error {
+            let err_msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("Unknown error");
+            tracing::error!("API returned error: {}", err_msg);
+            return Err(anyhow!("API error: {}", err_msg));
+        }
+        
         Ok(CompletionResponse {
             content: completion.choices
                 .first()
@@ -403,7 +410,10 @@ pub struct StreamDelta {
 #[derive(Debug, Deserialize)]
 struct OpenAICompletion {
     choices: Vec<OpenAIChoice>,
+    #[serde(default)]
     usage: Option<OpenAIUsage>,
+    #[serde(default)]
+    error: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
