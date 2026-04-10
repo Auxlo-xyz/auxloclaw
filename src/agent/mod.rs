@@ -10,6 +10,7 @@ use crate::memory::{MemoryEngine, SessionHistory, SessionStore, HistoryMessage};
 use crate::orchestrator::ToolOrchestrator;
 use crate::providers::{CompletionRequest, Message, ProviderPool, ToolCall};
 use crate::persona::PersonaConfig;
+use regex::Regex;
 
 /// Usage statistics
 #[derive(Debug, Clone, Default)]
@@ -166,8 +167,9 @@ impl AgentCore {
         self.add_to_history(&session_key, "user", message).await;
         self.add_to_history(&session_key, "assistant", &final_response).await;
         
-        // Filter out <thought></thought> tags
-        let filtered_response = final_response.replace("<thought>", "").replace("</thought>", "");
+        // Filter out <thought></thought> blocks including content using regex
+        let re = Regex::new(r"(?s)<thought>.*?</thought>").unwrap();
+        let filtered_response = re.replace_all(&final_response, "").to_string();
         
         filtered_response
     }

@@ -75,6 +75,7 @@ teloxide = { version = "0.12", features = ["rustls", "webhooks-axum", "macros"],
 # Utilities
 shellexpand = "1"
 sync_wrapper = "0.1"
+regex = "1.10"
 
 [dev-dependencies]
 tokio-test = "0.4"
