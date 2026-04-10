@@ -170,16 +170,39 @@ impl LLMProvider for OpenAICompatibleProvider {
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
-        let url = format!("{}/chat/completions", self.api_base);
+        // Strip provider prefix from model name (e.g., "google/gemma-4-26b-a4b-it" -> "gemma-4-26b-a4b-it")
+        let model_name = request.model.split('/').last().unwrap_or(&request.model);
         
-        tracing::debug!("Provider: {} | Model: {}", self.name, request.model);
+        let mut url = format!("{}/chat/completions", self.api_base);
         
-        let body = serde_json::to_value(&request)?;
+        // Google AI Studio requires key as query param
+        if self.api_base.contains("generativelanguage.googleapis.com") && !self.api_key.is_empty() {
+            url = format!("{}?key={}", url, self.api_key);
+        }
+        
+        // Build headers - Google needs Authorization header too
+        let headers = if self.api_base.contains("generativelanguage.googleapis.com") {
+            let mut h = reqwest::header::HeaderMap::new();
+            h.insert(reqwest::header::CONTENT_TYPE, "application/json".parse().unwrap());
+            // Google also needs Bearer auth even with key param
+            if !self.api_key.is_empty() {
+                h.insert(reqwest::header::AUTHORIZATION, format!("Bearer {}", self.api_key).parse().unwrap());
+            }
+            h
+        } else {
+            self.build_headers()
+        };
+        
+        tracing::info!("Making request to URL: {} with key present: {}", url, !self.api_key.is_empty());
+        
+        let mut req = request.clone();
+        req.model = model_name.to_string();
+        let body = serde_json::to_value(&req)?;
         tracing::debug!("Request body: {}", serde_json::to_string_pretty(&body)?);
         
         let response = self.client
             .post(&url)
-            .headers(self.build_headers())
+            .headers(headers)
             .json(&body)
             .send()
             .await?;
