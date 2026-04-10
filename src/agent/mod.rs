@@ -166,7 +166,10 @@ impl AgentCore {
         self.add_to_history(&session_key, "user", message).await;
         self.add_to_history(&session_key, "assistant", &final_response).await;
         
-        final_response
+        // Filter out <thought></thought> tags
+        let filtered_response = final_response.replace("<thought>", "").replace("</thought>", "");
+        
+        filtered_response
     }
     
     async fn execute_tool(&self, tool_call: &ToolCall) -> String {
