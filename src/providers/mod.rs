@@ -3,7 +3,6 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
-pub mod google_native;
 use dashmap::DashMap;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -14,7 +13,6 @@ use tokio::sync::mpsc;
 use tokio::time;
 
 use crate::config::{ProviderEntry, ProvidersConfig};
-use crate::providers::google_native::GoogleNativeProvider;
 
 /// LLM Provider trait - unified interface for all providers
 #[async_trait]
@@ -43,18 +41,14 @@ impl ProviderPool {
             .build()
             .unwrap_or_else(|_| Client::new());
         
-        // Create primary provider based on type
-        let primary: Arc<dyn LLMProvider> = if config.primary.name.to_lowercase() == "google" {
-            Arc::new(GoogleNativeProvider::new(config.primary.api_key.clone())) as Arc<dyn LLMProvider>
-        } else {
-            Arc::new(OpenAICompatibleProvider::new(
-                config.primary.name.clone(),
-                config.primary.api_key.clone(),
-                config.primary.api_base.clone(),
-                client.clone(),
-                config.primary.extra_headers.clone(),
-            ))
-        };
+        // Create primary provider
+        let primary: Arc<dyn LLMProvider> = Arc::new(OpenAICompatibleProvider::new(
+            config.primary.name.clone(),
+            config.primary.api_key.clone(),
+            config.primary.api_base.clone(),
+            client.clone(),
+            config.primary.extra_headers.clone(),
+        ));
         
         // Create fallback providers
         let fallbacks: Vec<Arc<dyn LLMProvider>> = config.fallbacks
