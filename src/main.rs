@@ -140,6 +140,8 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
         .route("/api/chat", axum::routing::post(chat_handler))
         .route("/api/status", axum::routing::get(status_handler))
         .route("/api/skills", axum::routing::get(list_skills_handler))
+        .route("/api/reflect", axum::routing::post(reflect_handler))
+        .route("/api/reflections", axum::routing::get(list_reflections_handler))
         .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
         .layer(TraceLayer::new_for_http())
         .with_state(agent.clone());
@@ -191,4 +193,43 @@ async fn list_skills_handler() -> axum::Json<Vec<String>> {
         "fine-tuning-axolotl".into(),
     ])
 }
+
+#[derive(Deserialize)]
+struct ReflectRequest {
+    session_id: Option<String>,
+}
+
+async fn reflect_handler(
+    axum::extract::State(agent): axum::extract::State<Arc<agent::AgentCore>>,
+    axum::Json(req): axum::Json<ReflectRequest>,
+) -> axum::Json<serde_json::Value> {
+    let session_key = req.session_id.unwrap_or_else(|| "default".to_string());
+    
+    match agent.run_reflection(&session_key).await {
+        Some(reflection) => {
+            axum::Json(serde_json::to_value(&reflection).unwrap_or_else(|_| {
+                serde_json::json!({"error": "Failed to serialize reflection"})
+            }))
+        }
+        None => {
+            axum::Json(serde_json::json!({
+                "error": "Reflection not triggered (check min_messages or cooldown)"
+            }))
+        }
+    }
+}
+
+async fn list_reflections_handler(
+    axum::extract::State(agent): axum::extract::State<Arc<agent::AgentCore>>,
+) -> axum::Json<Vec<serde_json::Value>> {
+    match agent.get_all_reflections() {
+        Some(reflections) => {
+            axum::Json(reflections.iter()
+                .map(|r| serde_json::to_value(r).unwrap_or_default())
+                .collect())
+        }
+        None => axum::Json(vec![]),
+    }
+}
+
 mod streaming_agent;
