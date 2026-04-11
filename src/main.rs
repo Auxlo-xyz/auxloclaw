@@ -1,6 +1,8 @@
 //! AUXLOCLAW - Ultra-High-Performance AI Agent Framework
 
 mod agent;
+mod error_recovery;
+mod coordination;
 mod channels;
 mod config;
 mod persona;

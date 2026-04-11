@@ -199,7 +199,7 @@ impl AgentCore {
         }
     }
     
-    async fn add_to_history(&self, session_key: &str, role: &str, content: &str) {
+    pub async fn add_to_history(&self, session_key: &str, role: &str, content: &str) {
         let mut sessions = self.sessions.write().await;
         let session = sessions
             .entry(session_key.to_string())
