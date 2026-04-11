@@ -118,6 +118,28 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     
     info!("⚡ Core initialized in {:?}", start.elapsed());
     
+    // Spawn reflection monitor background task
+    let monitor_agent = agent.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            
+            // Check for sessions needing reflection
+            let sessions = monitor_agent.get_sessions_needing_reflection().await;
+            
+            for session_key in sessions {
+                tracing::info!("Auto-reflection triggered for inactive session: {}", session_key);
+                if let Some(reflection) = monitor_agent.run_reflection(&session_key).await {
+                    tracing::info!(
+                        "Auto-reflection complete: {} - {}",
+                        reflection.reflection_type.to_string().to_lowercase(),
+                        reflection.title
+                    );
+                }
+            }
+        }
+    });
+    
     // Start Telegram channel if enabled
     let _tg_handle = if config.channels.telegram.enabled {
         let tg_agent = agent.clone();

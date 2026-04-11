@@ -162,6 +162,8 @@ pub struct MemoryConfig {
     pub reflection_min_messages: usize,
     #[serde(default = "default_reflection_cooldown")]
     pub reflection_cooldown_secs: u64,
+    #[serde(default = "default_reflection_interval")]
+    pub reflection_interval_secs: u64,
 }
 
 fn default_compaction_threshold() -> usize { 40 }
@@ -169,6 +171,7 @@ fn default_compaction_keep_recent() -> usize { 10 }
 fn default_compaction_cooldown() -> u64 { 300 }
 fn default_reflection_min_messages() -> usize { 5 }
 fn default_reflection_cooldown() -> u64 { 300 }
+fn default_reflection_interval() -> u64 { 300 } // 5 minutes of inactivity
 
 impl Default for MemoryConfig {
     fn default() -> Self {
@@ -184,6 +187,7 @@ impl Default for MemoryConfig {
             reflection_enabled: true,
             reflection_min_messages: 5,
             reflection_cooldown_secs: 300,
+            reflection_interval_secs: 300, // 5 minutes of inactivity
         }
     }
 }

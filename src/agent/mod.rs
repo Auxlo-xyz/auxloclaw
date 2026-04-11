@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::collections::HashMap;
 use tokio::sync::RwLock;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::AppConfig;
 use crate::memory::{MemoryEngine, SessionHistory, SessionStore, HistoryMessage, Compactor, CompactionResult, Reflector, Reflection, ReflectorConfig};
@@ -38,6 +39,8 @@ pub struct AgentCore {
     session_store: Arc<SessionStore>,
     compactor: Arc<Compactor>,
     reflector: Arc<Reflector>,
+    /// Last activity timestamp per session (epoch seconds)
+    last_activity: RwLock<HashMap<String, u64>>,
 }
 
 impl AgentCore {
@@ -74,6 +77,7 @@ impl AgentCore {
             session_store,
             compactor,
             reflector,
+            last_activity: RwLock::new(HashMap::new()),
         }
     }
 
@@ -198,6 +202,9 @@ impl AgentCore {
         // Filter out <thought></thought> blocks including content using regex
         let re = Regex::new(r"(?s)<thought>.*?</thought>").unwrap();
         let filtered_response = re.replace_all(&final_response, "").to_string();
+        
+        // Update last activity timestamp for the session
+        self.touch_activity(&session_key).await;
         
         filtered_response
     }
@@ -435,6 +442,46 @@ impl AgentCore {
         }
         
         None
+    }
+    
+    /// Update last activity timestamp for a session
+    pub async fn touch_activity(&self, session_key: &str) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        
+        let mut last_activity = self.last_activity.write().await;
+        last_activity.insert(session_key.to_string(), now);
+    }
+    
+    /// Get sessions that have been inactive for longer than reflection_interval_secs
+    /// and have enough messages to qualify for reflection
+    pub async fn get_sessions_needing_reflection(&self) -> Vec<String> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        
+        let interval_secs = self.config.memory.reflection_interval_secs;
+        let min_messages = self.config.memory.reflection_min_messages;
+        
+        let sessions = self.sessions.read().await;
+        let last_activity = self.last_activity.read().await;
+        
+        let mut result = Vec::new();
+        
+        for (key, session) in sessions.iter() {
+            let last = last_activity.get(key).copied().unwrap_or(0);
+            let inactive_secs = now.saturating_sub(last);
+            
+            // Check: inactive long enough AND has enough messages
+            if inactive_secs >= interval_secs && session.messages.len() >= min_messages {
+                result.push(key.clone());
+            }
+        }
+        
+        result
     }
     
     /// Get reflections for a session
