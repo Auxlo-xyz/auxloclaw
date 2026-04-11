@@ -67,8 +67,8 @@ async fn main() -> anyhow::Result<()> {
             commands::persona::handle_persona(action)?;
         }
         
-        Commands::Status => {
-            commands::status::handle_status()?;
+        Commands::Status { delegation } => {
+            commands::status::handle_status(delegation)?;
         }
         
         Commands::Run { skill, args: run_args } => {

@@ -68,7 +68,11 @@ pub enum Commands {
         action: PersonaCommands,
     },
     /// Show system status
-    Status,
+    Status {
+        /// Show delegation statistics
+        #[arg(long)]
+        delegation: bool,
+    },
     /// Run a skill
     Run {
         skill: String,
