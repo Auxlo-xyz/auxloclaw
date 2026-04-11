@@ -13,7 +13,10 @@ use std::fs;
 use crate::config::MemoryConfig;
 
 pub mod compactor;
+pub mod reflector;
+
 pub use compactor::{Compactor, CompactionResult, CompactionSummary};
+pub use reflector::{Reflector, Reflection, ReflectionType, ReflectorConfig};
 
 /// Memory entry
 #[derive(Debug, Clone, Serialize, Deserialize)]

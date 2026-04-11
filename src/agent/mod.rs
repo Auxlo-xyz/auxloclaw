@@ -7,7 +7,7 @@ use tokio::sync::RwLock;
 use std::path::PathBuf;
 
 use crate::config::AppConfig;
-use crate::memory::{MemoryEngine, SessionHistory, SessionStore, HistoryMessage, Compactor, CompactionResult};
+use crate::memory::{MemoryEngine, SessionHistory, SessionStore, HistoryMessage, Compactor, CompactionResult, Reflector, Reflection, ReflectorConfig};
 use crate::orchestrator::ToolOrchestrator;
 use crate::providers::{CompletionRequest, Message, ProviderPool, ToolCall};
 use crate::persona::PersonaConfig;
@@ -37,6 +37,7 @@ pub struct AgentCore {
     pub sessions: RwLock<HashMap<String, SessionHistory>>,
     session_store: Arc<SessionStore>,
     compactor: Arc<Compactor>,
+    reflector: Arc<Reflector>,
 }
 
 impl AgentCore {
@@ -48,13 +49,20 @@ impl AgentCore {
         session_store: Arc<SessionStore>,
     ) -> Self {
         let persona = config.persona.clone();
-        let compactor = Arc::new(Compactor::new(
-            config.memory.clone(),
-            PathBuf::from(shellexpand::tilde(&config.memory.database_path).into_owned())
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| PathBuf::from("~/.auxloclaw")),
-        ));
+        let data_dir = PathBuf::from(shellexpand::tilde(&config.memory.database_path).into_owned())
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("~/.auxloclaw"));
+        
+        let compactor = Arc::new(Compactor::new(config.memory.clone(), data_dir.clone()));
+        
+        let reflector_config = ReflectorConfig {
+            enabled: config.memory.reflection_enabled,
+            min_messages: config.memory.reflection_min_messages,
+            cooldown_secs: config.memory.reflection_cooldown_secs,
+        };
+        let reflector = Arc::new(Reflector::new(reflector_config, data_dir));
+        
         Self {
             config,
             memory,
@@ -65,6 +73,7 @@ impl AgentCore {
             sessions: RwLock::new(HashMap::new()),
             session_store,
             compactor,
+            reflector,
         }
     }
 
@@ -383,5 +392,58 @@ impl AgentCore {
     
     pub fn model_name(&self) -> &str {
         &self.config.agent.default_model
+    }
+    
+    /// Run reflection on a session
+    /// Can be triggered explicitly or after significant activity
+    pub async fn run_reflection(&self, session_key: &str) -> Option<Reflection> {
+        // Get current message count
+        let message_count = {
+            let sessions = self.sessions.read().await;
+            sessions.get(session_key)
+                .map(|s| s.messages.len())
+                .unwrap_or(0)
+        };
+        
+        // Check if reflection should run
+        if !self.reflector.should_reflect(session_key, message_count) {
+            return None;
+        }
+        
+        tracing::info!(
+            "Reflection triggered for session {} ({} messages)",
+            session_key,
+            message_count
+        );
+        
+        // Get session and reflect
+        let sessions = self.sessions.read().await;
+        if let Some(session) = sessions.get(session_key) {
+            match self.reflector.reflect(session).await {
+                Ok(reflection) => {
+                    tracing::info!(
+                        "Reflection complete: {} - {}",
+                        reflection.reflection_type.to_string().to_lowercase(),
+                        reflection.title
+                    );
+                    return Some(reflection);
+                }
+                Err(e) => {
+                    tracing::error!("Reflection error: {}", e);
+                }
+            }
+        }
+        
+        None
+    }
+    
+    /// Get reflections for a session
+    pub fn get_reflections(&self, session_key: &str) -> Option<Vec<Reflection>> {
+        self.reflector.load_reflections(session_key).ok()
+    }
+    
+    /// Get all reflections across all sessions
+    pub fn get_all_reflections(&self) -> Option<Vec<Reflection>> {
+        self.reflector.load_all_reflections().ok()
     }
 }

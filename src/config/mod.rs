@@ -155,11 +155,20 @@ pub struct MemoryConfig {
     pub compaction_keep_recent: usize,
     #[serde(default = "default_compaction_cooldown")]
     pub compaction_cooldown_secs: u64,
+    // Reflection settings
+    #[serde(default = "default_true")]
+    pub reflection_enabled: bool,
+    #[serde(default = "default_reflection_min_messages")]
+    pub reflection_min_messages: usize,
+    #[serde(default = "default_reflection_cooldown")]
+    pub reflection_cooldown_secs: u64,
 }
 
 fn default_compaction_threshold() -> usize { 40 }
 fn default_compaction_keep_recent() -> usize { 10 }
 fn default_compaction_cooldown() -> u64 { 300 }
+fn default_reflection_min_messages() -> usize { 5 }
+fn default_reflection_cooldown() -> u64 { 300 }
 
 impl Default for MemoryConfig {
     fn default() -> Self {
@@ -172,6 +181,9 @@ impl Default for MemoryConfig {
             compaction_threshold: 40,
             compaction_keep_recent: 10,
             compaction_cooldown_secs: 300,
+            reflection_enabled: true,
+            reflection_min_messages: 5,
+            reflection_cooldown_secs: 300,
         }
     }
 }
