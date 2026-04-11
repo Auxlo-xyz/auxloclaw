@@ -30,6 +30,7 @@ pub trait LLMProvider: Send + Sync {
 pub struct ProviderPool {
     primary: Arc<dyn LLMProvider>,
     fallbacks: Vec<Arc<dyn LLMProvider>>,
+    providers: std::collections::HashMap<String, Arc<dyn LLMProvider>>,
     #[allow(dead_code)]
     client: Client,
 }
@@ -64,9 +65,16 @@ impl ProviderPool {
             })
             .collect();
         
+        let mut providers = std::collections::HashMap::new();
+        providers.insert("primary".to_string(), primary.clone());
+        for fb in &fallbacks {
+            providers.insert(fb.name().to_string(), fb.clone());
+        }
+        
         Self {
             primary,
             fallbacks,
+            providers,
             client,
         }
     }
@@ -129,6 +137,18 @@ impl ProviderPool {
     pub fn primary(&self) -> &Arc<dyn LLMProvider> {
         &self.primary
     }
+    
+    pub fn set_provider(&mut self, name: String, provider: Arc<dyn LLMProvider>) {
+        self.providers.insert(name, provider);
+    }
+    
+    pub fn get_provider(&self, name: &str) -> Option<&Arc<dyn LLMProvider>> {
+        self.providers.get(name)
+    }
+    
+    pub fn list_providers(&self) -> Vec<String> {
+        self.providers.keys().cloned().collect()
+    }
 }
 
 /// OpenAI-compatible provider (NVIDIA, OpenAI, OpenRouter, etc.)
@@ -186,7 +206,11 @@ impl LLMProvider for OpenAICompatibleProvider {
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
         // Strip provider prefix from model name (e.g., "google/gemma-4-26b-a4b-it" -> "gemma-4-26b-a4b-it")
-        let model_name = request.model.split('/').last().unwrap_or(&request.model);
+        let model_name = if self.api_base.contains("generativelanguage.googleapis.com") {
+            request.model.split('/').last().unwrap_or(&request.model).to_string()
+        } else {
+            request.model.clone()
+        };
         
         let mut url = format!("{}/chat/completions", self.api_base);
         
