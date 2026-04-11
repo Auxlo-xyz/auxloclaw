@@ -12,6 +12,7 @@ use crate::persona::PersonaConfig;
 #[serde(default)]
 pub struct AppConfig {
     pub agent: AgentConfig,
+    pub sub_agents: SubAgentsConfig,
     pub persona: PersonaConfig,
     pub providers: ProvidersConfig,
     pub memory: MemoryConfig,
@@ -82,6 +83,51 @@ impl Default for ProvidersConfig {
             }],
             connection_pool_size: 32,
             request_timeout_secs: 60,
+        }
+    }
+}
+
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SubAgentsConfig {
+    /// Enable sub-agent delegation
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Minimum complexity score to trigger delegation (0-100)
+    #[serde(default = "default_min_complexity")]
+    pub min_complexity: u32,
+    /// Maximum token budget per session for sub-agents
+    #[serde(default = "default_max_budget")]
+    pub max_budget: u32,
+    /// Maximum concurrent sub-agents
+    #[serde(default = "default_max_concurrent")]
+    pub max_concurrent: u32,
+    /// Timeout for sub-agent tasks (seconds)
+    #[serde(default = "default_subagent_timeout")]
+    pub timeout_secs: u64,
+    /// Fallback to main agent on failure
+    #[serde(default = "default_true")]
+    pub fallback_on_error: bool,
+    /// Cost tracking enabled
+    #[serde(default = "default_true")]
+    pub track_cost: bool,
+}
+
+fn default_min_complexity() -> u32 { 50 }
+fn default_max_budget() -> u32 { 30000 }
+fn default_max_concurrent() -> u32 { 5 }
+fn default_subagent_timeout() -> u64 { 60 }
+
+impl Default for SubAgentsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_complexity: 50,
+            max_budget: 30000,
+            max_concurrent: 5,
+            timeout_secs: 60,
+            fallback_on_error: true,
+            track_cost: true,
         }
     }
 }

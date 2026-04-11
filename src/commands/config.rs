@@ -61,9 +61,92 @@ pub fn handle_config(action: crate::cli::ConfigCommands) -> Result<()> {
                 bail!("Config file not found. Run `auxloclaw setup` first.");
             }
             
-            // Simple implementation - just append/set the value
-            println!("Setting {} = {}", key, value);
-            println!("Note: Direct config editing not fully implemented. Use `auxloclaw config edit`.");
+            let content = fs::read_to_string(&config_path)?;
+            
+            // Parse and modify
+            let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+            
+            // Handle nested keys like sub_agents.enabled
+            let parts: Vec<&str> = key.split('.').collect();
+            
+            // Determine value format
+            let value_str = if value == "true" || value == "false" {
+                value.clone()
+            } else if value.parse::<u32>().is_ok() {
+                value.clone()
+            } else if value.parse::<f32>().is_ok() {
+                value.clone()
+            } else {
+                format!("\"{}\"", value)
+            };
+            
+            // Simple key update for known patterns
+            let mut found = false;
+            let mut in_section = None;
+            
+            for i in 0..lines.len() {
+                let line = &lines[i];
+                
+                // Track current section
+                if line.starts_with('[') && line.ends_with(']') {
+                    let section = &line[1..line.len()-1];
+                    in_section = Some(section.to_string());
+                    continue;
+                }
+                
+                // Check for key match
+                if parts.len() == 1 {
+                    // Top-level key (unlikely)
+                    if line.starts_with(&format!("{} = ", parts[0])) {
+                        lines[i] = format!("{} = {}", parts[0], value_str);
+                        found = true;
+                        break;
+                    }
+                } else if parts.len() == 2 {
+                    // Section.key format
+                    if let Some(ref section) = in_section {
+                        if section == parts[0] {
+                            if line.starts_with(&format!("{} = ", parts[1])) || 
+                               line.trim().starts_with(&format!("{} = ", parts[1])) {
+                                // Preserve indentation
+                                let indent = if line.starts_with("  ") { "  " } else { "" };
+                                lines[i] = format!("{}{} = {}", indent, parts[1], value_str);
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if !found {
+                // Try to add the key if section exists
+                if parts.len() == 2 {
+                    let mut added = false;
+                    for i in 0..lines.len() {
+                        if lines[i] == format!("[{}]", parts[0]) {
+                            // Add after section header
+                            lines.insert(i + 1, format!("{} = {}", parts[1], value_str));
+                            added = true;
+                            break;
+                        }
+                    }
+                    if !added {
+                        // Add section and key at end
+                        lines.push(format!("[{}]", parts[0]));
+                        lines.push(format!("{} = {}", parts[1], value_str));
+                    }
+                    found = true;
+                }
+            }
+            
+            if found {
+                let new_content = lines.join("\n") + "\n";
+                fs::write(&config_path, new_content)?;
+                println!("✅ Set {} = {}", key, value);
+            } else {
+                bail!("Could not find or create key: {}", key);
+            }
         }
         
         crate::cli::ConfigCommands::Edit => {

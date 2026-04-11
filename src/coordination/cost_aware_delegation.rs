@@ -407,6 +407,11 @@ impl CostAwareDelegator {
         self.budget.min_complexity_for_delegation = min;
     }
 
+    /// Set maximum budget for sub-agents
+    pub fn set_max_budget(&mut self, budget: u32) {
+        self.budget.max_sub_agent_tokens_per_session = budget;
+    }
+
     /// Get delegation statistics
     pub fn stats(&self) -> DelegationStats {
         let total = self.delegation_history.len();
