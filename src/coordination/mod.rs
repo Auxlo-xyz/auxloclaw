@@ -2,14 +2,15 @@
 //! Based on Claude Code's multi-agent architecture
 
 pub mod sub_agent;
+pub mod cost_aware_delegation;
 pub mod task_delegation;
 
 pub use sub_agent::{SubAgent, SubAgentConfig, SubAgentResult};
 pub use task_delegation::{TaskDelegator, DelegatedTask, TaskPriority};
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::RwLock;
 use std::collections::HashMap;
 
 use crate::config::AppConfig;
@@ -17,6 +18,8 @@ use crate::providers::ProviderPool;
 use crate::orchestrator::ToolOrchestrator;
 use crate::memory::SessionStore;
 use crate::error_recovery::{AgentError, RecoveryAction};
+
+pub use cost_aware_delegation::{TokenBudget, CostAwareDelegator, ComplexityAnalyzer, TaskComplexity, DelegationDecision, DelegationStats};
 
 /// Main agent coordinator
 pub struct AgentCoordinator {
@@ -26,6 +29,8 @@ pub struct AgentCoordinator {
     sub_agents: RwLock<HashMap<String, Arc<SubAgent>>>,
     /// Task delegator
     delegator: TaskDelegator,
+    /// Cost-aware delegator (wraps budget and complexity analysis)
+    cost_aware_delegator: RwLock<CostAwareDelegator>,
     /// Provider pool (shared)
     providers: Arc<ProviderPool>,
     /// Tool orchestrator (shared)
@@ -65,6 +70,7 @@ impl AgentCoordinator {
             main_agent,
             sub_agents: RwLock::new(HashMap::new()),
             delegator: TaskDelegator::new(),
+            cost_aware_delegator: RwLock::new(CostAwareDelegator::new(TokenBudget::default())),
             providers,
             orchestrator,
             session_store,
@@ -169,11 +175,66 @@ impl AgentCoordinator {
             main_agent: self.main_agent.clone(),
             sub_agents: RwLock::new(HashMap::new()),
             delegator: TaskDelegator::new(),
+            cost_aware_delegator: RwLock::new(CostAwareDelegator::new(TokenBudget::default())),
             providers: self.providers.clone(),
             orchestrator: self.orchestrator.clone(),
             session_store: self.session_store.clone(),
             config: self.config.clone(),
         }
+    }
+
+    /// Process with cost-aware delegation
+    /// Returns the response and whether delegation occurred
+    pub async fn process_with_cost_aware_delegation(
+        &self,
+        message: &str,
+        session_id: Option<&str>,
+    ) -> (String, bool) {
+        // Get delegation decision with cost analysis
+        let decision = self.cost_aware_delegator.write().await.should_delegate(message);
+        
+        tracing::info!(
+            "Delegation decision: delegate={}, reason={}, complexity={}",
+            decision.delegate,
+            decision.reason,
+            decision.complexity.score
+        );
+
+        if decision.delegate {
+            let agent_type = self.delegator.classify_task(message);
+            match self.delegate_task(message, Some(&agent_type)).await {
+                Ok(result) => {
+                    // Record usage
+                    self.cost_aware_delegator.write().await.record_usage(
+                        decision.complexity.estimated_sub_agent_tokens,
+                        true
+                    );
+                    (result, true)
+                }
+                Err(e) => {
+                    tracing::warn!("Sub-agent failed, falling back to main: {}", e);
+                    (self.main_agent.process(message, session_id).await, false)
+                }
+            }
+        } else {
+            // Process with main agent
+            (self.main_agent.process(message, session_id).await, false)
+        }
+    }
+
+    /// Enable or disable sub-agents
+    pub async fn set_sub_agents_enabled(&self, enabled: bool) {
+        self.cost_aware_delegator.write().await.set_sub_agents_enabled(enabled);
+    }
+
+    /// Set minimum complexity threshold for delegation
+    pub async fn set_min_delegation_complexity(&self, min: u32) {
+        self.cost_aware_delegator.write().await.set_min_complexity(min);
+    }
+
+    /// Get delegation statistics
+    pub async fn delegation_stats(&self) -> DelegationStats {
+        self.cost_aware_delegator.read().await.stats()
     }
 
     /// Process with automatic delegation
