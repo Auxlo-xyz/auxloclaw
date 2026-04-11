@@ -100,12 +100,24 @@ impl AgentCore {
         // Get history
         let history = self.get_history(&session_key).await;
         
+        // Get reflections
+        let reflections = self.get_reflections(&session_key).unwrap_or_else(Vec::new);
+        
         // Build initial messages
         let mut messages = vec![Message {
             role: "system".into(),
             content: self.build_system_prompt(),
             tool_calls: None,
         }];
+        
+        // Add reflections as system messages
+        for reflection in reflections {
+            messages.push(Message {
+                role: "system".into(),
+                content: serde_json::to_string(&reflection).unwrap_or_else(|_| reflection.title.clone()),
+                tool_calls: None,
+            });
+        }
         
         // Add history
         for m in history {
