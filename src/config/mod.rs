@@ -132,6 +132,10 @@ impl Default for SubAgentsConfig {
     }
 }
 
+fn default_cache_size() -> usize { 1000 }
+fn default_db_path() -> String { "~/.auxloclaw/memory.db".into() }
+fn default_consolidation() -> u64 { 300 }
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MemoryConfig {
     #[serde(default = "default_cache_size")]
