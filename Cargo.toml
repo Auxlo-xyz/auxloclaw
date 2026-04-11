@@ -1,5 +1,6 @@
 [package]
 name = "auxloclaw"
+futures = "0.3"
 version = "0.1.0"
 edition = "2021"
 authors = ["Auxlo <hello@auxlo.xyz>"]
@@ -8,10 +9,10 @@ license = "MIT"
 repository = "https://github.com/auxlo/auxloclaw"
 
 [dependencies]
+futures = "0.3"
 # Async runtime
 tokio = { version = "1", features = ["full", "tracing"] }
 async-trait = "0.1"
-futures = "0.3"
 pin-project = "1"
 
 # HTTP & WebSocket
