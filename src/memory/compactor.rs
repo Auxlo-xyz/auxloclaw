@@ -79,7 +79,6 @@ pub struct Compactor {
     config: MemoryConfig,
     cooldown: CompactionCooldown,
     summaries_dir: PathBuf,
-    google_api_key: Option<String>,
 }
 
 impl Compactor {
@@ -90,7 +89,6 @@ impl Compactor {
         Self {
             cooldown: CompactionCooldown::new(config.compaction_cooldown_secs),
             summaries_dir,
-            google_api_key: std::env::var("GOOGLE_AI_STUDIO_KEY").ok(),
             config,
         }
     }
@@ -145,7 +143,7 @@ impl Compactor {
         // Build prompt for summarization
         let prompt = self.build_summary_prompt(&to_compact);
         
-        // Call Google Gemma for summarization
+        // Call Pollinations.ai for summarization (free, no API key needed)
         match self.call_gemma(&prompt).await {
             Ok(summary) => {
                 // Create summary message
@@ -230,60 +228,44 @@ impl Compactor {
         prompt
     }
 
-    /// Call Google Gemma 3 4B via direct fetch
+    /// Call Pollinations.ai for summarization (free, no API key needed)
     async fn call_gemma(&self, prompt: &str) -> Result<String> {
-        let api_key = self.google_api_key.as_ref()
-            .context("GOOGLE_AI_STUDIO_KEY not set")?;
-        
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemma-3-4b-it:generateContent?key={}",
-            api_key
-        );
+        let url = "https://text.pollinations.ai/";
         
         let body = serde_json::json!({
-            "contents": [{
-                "parts": [{
-                    "text": prompt
-                }]
-            }],
-            "generationConfig": {
-                "temperature": 0.3,
-                "maxOutputTokens": 1024
-            }
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a concise summarizer. Summarize conversations briefly, preserving key facts, decisions, and context."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
         });
         
         let client = reqwest::Client::new();
         let response = client
-            .post(&url)
+            .post(url)
             .header("Content-Type", "application/json")
             .json(&body)
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(60))
             .send()
             .await
-            .context("Failed to call Google AI API")?;
+            .context("Failed to call Pollinations.ai API")?;
         
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Google AI API error: {} - {}", status, body);
+            anyhow::bail!("Pollinations.ai API error: {} - {}", status, body);
         }
         
-        let json: serde_json::Value = response.json().await
-            .context("Failed to parse Google AI response")?;
+        // Pollinations returns plain text directly
+        let text = response.text().await
+            .context("Failed to read Pollinations.ai response")?;
         
-        // Extract text from response
-        let text = json
-            .get("candidates")
-            .and_then(|c| c.get(0))
-            .and_then(|c| c.get("content"))
-            .and_then(|c| c.get("parts"))
-            .and_then(|p| p.get(0))
-            .and_then(|p| p.get("text"))
-            .and_then(|t| t.as_str())
-            .context("Unexpected response format from Google AI")?
-            .to_string();
-        
-        Ok(text)
+        Ok(text.trim().to_string())
     }
 
     /// Save compaction summary to disk
