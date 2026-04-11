@@ -142,11 +142,20 @@ pub struct MemoryConfig {
     pub embedding_model: Option<String>,
     #[serde(default = "default_consolidation")]
     pub consolidation_interval_secs: u64,
+    // Compaction settings
+    #[serde(default = "default_true")]
+    pub compaction_enabled: bool,
+    #[serde(default = "default_compaction_threshold")]
+    pub compaction_threshold: usize,
+    #[serde(default = "default_compaction_keep_recent")]
+    pub compaction_keep_recent: usize,
+    #[serde(default = "default_compaction_cooldown")]
+    pub compaction_cooldown_secs: u64,
 }
 
-fn default_cache_size() -> usize { 1000 }
-fn default_db_path() -> String { "~/.auxloclaw/memory.db".into() }
-fn default_consolidation() -> u64 { 300 }
+fn default_compaction_threshold() -> usize { 40 }
+fn default_compaction_keep_recent() -> usize { 10 }
+fn default_compaction_cooldown() -> u64 { 300 }
 
 impl Default for MemoryConfig {
     fn default() -> Self {
@@ -155,6 +164,10 @@ impl Default for MemoryConfig {
             database_path: "~/.auxloclaw/memory.db".into(),
             embedding_model: None,
             consolidation_interval_secs: 300,
+            compaction_enabled: true,
+            compaction_threshold: 40,
+            compaction_keep_recent: 10,
+            compaction_cooldown_secs: 300,
         }
     }
 }

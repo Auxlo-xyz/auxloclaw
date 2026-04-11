@@ -1,6 +1,6 @@
 //! Memory Engine - with JSON file persistence for sessions
 
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use lru::LruCache;
 use std::sync::RwLock;
 use serde::{Deserialize, Serialize};
@@ -11,6 +11,9 @@ use std::sync::Arc;
 use std::fs;
 
 use crate::config::MemoryConfig;
+
+pub mod compactor;
+pub use compactor::{Compactor, CompactionResult, CompactionSummary};
 
 /// Memory entry
 #[derive(Debug, Clone, Serialize, Deserialize)]

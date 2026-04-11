@@ -4,9 +4,10 @@ use anyhow::Result;
 use std::sync::Arc;
 use std::collections::HashMap;
 use tokio::sync::RwLock;
+use std::path::PathBuf;
 
 use crate::config::AppConfig;
-use crate::memory::{MemoryEngine, SessionHistory, SessionStore, HistoryMessage};
+use crate::memory::{MemoryEngine, SessionHistory, SessionStore, HistoryMessage, Compactor, CompactionResult};
 use crate::orchestrator::ToolOrchestrator;
 use crate::providers::{CompletionRequest, Message, ProviderPool, ToolCall};
 use crate::persona::PersonaConfig;
@@ -35,6 +36,7 @@ pub struct AgentCore {
     usage: std::sync::atomic::AtomicU64,
     pub sessions: RwLock<HashMap<String, SessionHistory>>,
     session_store: Arc<SessionStore>,
+    compactor: Arc<Compactor>,
 }
 
 impl AgentCore {
@@ -46,6 +48,13 @@ impl AgentCore {
         session_store: Arc<SessionStore>,
     ) -> Self {
         let persona = config.persona.clone();
+        let compactor = Arc::new(Compactor::new(
+            config.memory.clone(),
+            PathBuf::from(shellexpand::tilde(&config.memory.database_path).into_owned())
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| PathBuf::from("~/.auxloclaw")),
+        ));
         Self {
             config,
             memory,
@@ -55,6 +64,7 @@ impl AgentCore {
             usage: std::sync::atomic::AtomicU64::new(0),
             sessions: RwLock::new(HashMap::new()),
             session_store,
+            compactor,
         }
     }
 
@@ -167,6 +177,15 @@ impl AgentCore {
         self.add_to_history(&session_key, "user", message).await;
         self.add_to_history(&session_key, "assistant", &final_response).await;
         
+        // Run compaction check after assistant response
+        if let Some(result) = self.run_post_compaction_check(&session_key).await {
+            tracing::info!(
+                "Session compacted: {} messages saved ~{} tokens",
+                result.compacted_messages,
+                result.tokens_saved
+            );
+        }
+        
         // Filter out <thought></thought> blocks including content using regex
         let re = Regex::new(r"(?s)<thought>.*?</thought>").unwrap();
         let filtered_response = re.replace_all(&final_response, "").to_string();
@@ -207,15 +226,70 @@ impl AgentCore {
         
         session.add_message(role, content, None);
         
-        if session.messages.len() > 50 {
-            let remove_count = session.messages.len() - 50;
-            session.messages.drain(0..remove_count);
-        }
+        // Note: removed the old 50 message limit - compaction handles this now
         
         let session_clone = session.clone();
         drop(sessions);
         
         let _ = self.session_store.save(session_key, &session_clone);
+    }
+    
+    /// Run post-compaction check after assistant response
+    /// Returns the compaction result if compaction was triggered
+    pub async fn run_post_compaction_check(&self, session_key: &str) -> Option<CompactionResult> {
+        // Get current message count
+        let message_count = {
+            let sessions = self.sessions.read().await;
+            sessions.get(session_key)
+                .map(|s| s.messages.len())
+                .unwrap_or(0)
+        };
+        
+        // Check if compaction should run
+        if !self.compactor.should_compact(session_key, message_count) {
+            return None;
+        }
+        
+        tracing::info!(
+            "Compaction triggered for session {} ({} messages >= threshold {})",
+            session_key,
+            message_count,
+            self.config.memory.compaction_threshold
+        );
+        
+        // Get mutable session and compact
+        let mut sessions = self.sessions.write().await;
+        if let Some(session) = sessions.get_mut(session_key) {
+            match self.compactor.compact(session).await {
+                Ok(result) => {
+                    if result.success {
+                        tracing::info!(
+                            "Compaction complete: {} -> {} messages, ~{} tokens saved",
+                            result.original_messages,
+                            result.compacted_messages,
+                            result.tokens_saved
+                        );
+                        
+                        // Save compacted session
+                        let session_clone = session.clone();
+                        drop(sessions);
+                        let _ = self.session_store.save(session_key, &session_clone);
+                        
+                        return Some(result);
+                    } else {
+                        tracing::warn!(
+                            "Compaction failed: {}",
+                            result.error.as_ref().unwrap_or(&"Unknown error".to_string())
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Compaction error: {}", e);
+                }
+            }
+        }
+        
+        None
     }
     
     fn build_request(&self, messages: Vec<Message>) -> CompletionRequest {
