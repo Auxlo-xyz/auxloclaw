@@ -47,15 +47,17 @@ impl Default for AgentConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProvidersConfig {
-    pub primary: ProviderEntry,
+    #[serde(default = "default_provider_name")]
+    pub active: String,
     #[serde(default)]
-    pub fallbacks: Vec<ProviderEntry>,
+    pub providers: Vec<ProviderEntry>,
     #[serde(default = "default_pool_size")]
     pub connection_pool_size: usize,
     #[serde(default = "default_timeout")]
     pub request_timeout_secs: u64,
 }
 
+fn default_provider_name() -> String { "nvidia".into() }
 fn default_pool_size() -> usize { 32 }
 fn default_timeout() -> u64 { 60 }
 
@@ -71,13 +73,13 @@ pub struct ProviderEntry {
 impl Default for ProvidersConfig {
     fn default() -> Self {
         Self {
-            primary: ProviderEntry {
+            active: "nvidia".into(),
+            providers: vec![ProviderEntry {
                 name: "nvidia".into(),
                 api_key: String::new(),
                 api_base: "https://integrate.api.nvidia.com/v1".into(),
                 extra_headers: None,
-            },
-            fallbacks: vec![],
+            }],
             connection_pool_size: 32,
             request_timeout_secs: 60,
         }
@@ -231,23 +233,55 @@ impl AppConfig {
     }
 
     fn with_env_overrides(mut self) -> Self {
-        // Only apply env overrides if the primary key is not already set
-        // This allows config.toml to take precedence
-        if self.providers.primary.api_key.is_empty() {
-            if let Ok(key) = std::env::var("NVIDIA_API_KEY") {
-                self.providers.primary.api_key = key;
-                self.providers.primary.name = "nvidia".into();
-                self.providers.primary.api_base = "https://integrate.api.nvidia.com/v1".into();
-            }
-            if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-                self.providers.primary.api_key = key;
-                self.providers.primary.name = "openai".into();
-                self.providers.primary.api_base = "https://api.openai.com/v1".into();
-            }
-            if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-                self.providers.primary.api_key = key;
-                self.providers.primary.name = "anthropic".into();
-                self.providers.primary.api_base = "https://api.anthropic.com/v1".into();
+        // Check if any provider has an empty API key and try to fill from env
+        for provider in &mut self.providers.providers {
+            if provider.api_key.is_empty() {
+                // Try to fill from environment based on provider name
+                match provider.name.to_lowercase().as_str() {
+                    "nvidia" => {
+                        if let Ok(key) = std::env::var("NVIDIA_API_KEY") {
+                            provider.api_key = key;
+                            provider.api_base = "https://integrate.api.nvidia.com/v1".into();
+                        }
+                    }
+                    "openai" => {
+                        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+                            provider.api_key = key;
+                            provider.api_base = "https://api.openai.com/v1".into();
+                        }
+                    }
+                    "google" | "google_ai_studio" | "gemini" => {
+                        if let Ok(key) = std::env::var("GOOGLE_AI_STUDIO_KEY") {
+                            provider.api_key = key;
+                            provider.api_base = "https://generativelanguage.googleapis.com/v1beta/openai".into();
+                        }
+                    }
+                    "anthropic" => {
+                        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+                            provider.api_key = key;
+                            provider.api_base = "https://api.anthropic.com/v1".into();
+                        }
+                    }
+                    "openrouter" => {
+                        if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
+                            provider.api_key = key;
+                            provider.api_base = "https://openrouter.ai/api/v1".into();
+                        }
+                    }
+                    "groq" => {
+                        if let Ok(key) = std::env::var("GROQ_API_KEY") {
+                            provider.api_key = key;
+                            provider.api_base = "https://api.groq.com/openai/v1".into();
+                        }
+                    }
+                    "deepseek" => {
+                        if let Ok(key) = std::env::var("DEEPSEEK_API_KEY") {
+                            provider.api_key = key;
+                            provider.api_base = "https://api.deepseek.com/v1".into();
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
 

@@ -58,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
         }
         
         Commands::Provider { action } => {
-            commands::provider::handle_provider(action)?;
+            commands::provider::handle_provider(action).await?;
         }
         
         Commands::Persona { action } => {

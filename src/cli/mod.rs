@@ -180,21 +180,18 @@ pub enum SkillCommands {
 
 #[derive(Subcommand)]
 pub enum ProviderCommands {
-    /// List all providers
+    /// List all available providers
     List,
-
-    /// Set primary provider
-    Set {
-        /// Provider name
+    
+    /// Show current active provider
+    Active,
+    
+    /// Switch to a different provider
+    Use {
+        /// Provider name to switch to
         name: String,
     },
-
-    /// Test provider connection
-    Test {
-        /// Provider name (tests all if not specified)
-        name: Option<String>,
-    },
-
+    
     /// Add a new provider
     Add {
         /// Provider name
@@ -208,11 +205,17 @@ pub enum ProviderCommands {
         #[arg(short, long)]
         key: Option<String>,
     },
-
+    
     /// Remove a provider
     Remove {
-        /// Provider name
+        /// Provider name to remove
         name: String,
+    },
+    
+    /// Test provider connection
+    Test {
+        /// Provider name (tests all if not specified)
+        name: Option<String>,
     },
 }
 
