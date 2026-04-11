@@ -288,7 +288,7 @@ impl LLMProvider for OpenAICompatibleProvider {
             .first()
             .map(|c| {
                 c.message.content.clone()
-                    .or(c.message.reasoning.clone())
+                    .or(c.message.reasoning_content.clone()).or(c.message.reasoning.clone())
                     .unwrap_or_default()
             })
             .unwrap_or_default();
@@ -468,6 +468,7 @@ struct OpenAIMessage {
     content: Option<String>,
     tool_calls: Option<Vec<ToolCall>>,
     reasoning: Option<String>,
+    reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
