@@ -11,7 +11,7 @@ repository = "https://github.com/auxlo/auxloclaw"
 [dependencies]
 futures = "0.3"
 # Async runtime
-tokio = { version = "1", features = ["full", "tracing"] }
+tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 pin-project = "1"
 
@@ -71,7 +71,7 @@ rayon = "1"
 teloxide = { version = "0.12", features = ["rustls", "webhooks-axum", "macros"], default-features = false }
 
 # Discord (simplified - stub for now)
-# serenity = { version = "0.12", default-features = false, features = ["rustls_backend", "gateway", "model", "http", "client", "cache", "utils"] }
+serenity = { version = "0.12", features = ["client", "gateway", "model", "standard_framework"] }
 
 # Utilities
 shellexpand = "1"

@@ -1,7 +1,7 @@
 //! Task Delegation Logic
 //! Analyzes tasks and determines optimal routing
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Task priority levels
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -26,7 +26,7 @@ pub struct DelegatedTask {
 /// Task delegator with classification rules
 pub struct TaskDelegator {
     /// Keyword mappings for agent types
-    agent_keywords: HashMap<String, Vec<String>>,
+    agent_keywords: BTreeMap<String, Vec<String>>,
     /// Tasks that should always be delegated
     delegate_patterns: Vec<String>,
     /// Tasks that should stay on main agent
@@ -35,45 +35,83 @@ pub struct TaskDelegator {
 
 impl TaskDelegator {
     pub fn new() -> Self {
-        let mut agent_keywords = HashMap::new();
-        
-        agent_keywords.insert("researcher".to_string(), vec![
-            "research".to_string(), "find information".to_string(),
-            "search for".to_string(), "look up".to_string(),
-            "analyze sources".to_string(), "gather data".to_string(),
-            "what is".to_string(), "explain".to_string(),
-            "compare".to_string(), "investigate".to_string(),
-        ]);
+        let mut agent_keywords = BTreeMap::new();
 
-        agent_keywords.insert("coder".to_string(), vec![
-            "write code".to_string(), "implement".to_string(),
-            "fix bug".to_string(), "debug".to_string(),
-            "refactor".to_string(), "optimize".to_string(),
-            "create function".to_string(), "script".to_string(),
-            "programming".to_string(), "develop".to_string(),
-        ]);
+        agent_keywords.insert(
+            "researcher".to_string(),
+            vec![
+                "research".to_string(),
+                "find information".to_string(),
+                "search for".to_string(),
+                "look up".to_string(),
+                "analyze sources".to_string(),
+                "gather data".to_string(),
+                "what is".to_string(),
+                "explain".to_string(),
+                "compare".to_string(),
+                "investigate".to_string(),
+            ],
+        );
 
-        agent_keywords.insert("analyst".to_string(), vec![
-            "analyze".to_string(), "interpret".to_string(),
-            "data".to_string(), "statistics".to_string(),
-            "metrics".to_string(), "report".to_string(),
-            "trends".to_string(), "patterns".to_string(),
-            "visualization".to_string(), "insights".to_string(),
-        ]);
+        agent_keywords.insert(
+            "coder".to_string(),
+            vec![
+                "write code".to_string(),
+                "implement".to_string(),
+                "fix bug".to_string(),
+                "debug".to_string(),
+                "refactor".to_string(),
+                "optimize".to_string(),
+                "create function".to_string(),
+                "script".to_string(),
+                "programming".to_string(),
+                "develop".to_string(),
+            ],
+        );
 
-        agent_keywords.insert("planner".to_string(), vec![
-            "plan".to_string(), "organize".to_string(),
-            "schedule".to_string(), "roadmap".to_string(),
-            "break down".to_string(), "strategy".to_string(),
-            "steps".to_string(), "workflow".to_string(),
-        ]);
+        agent_keywords.insert(
+            "analyst".to_string(),
+            vec![
+                "analyze".to_string(),
+                "interpret".to_string(),
+                "data".to_string(),
+                "statistics".to_string(),
+                "metrics".to_string(),
+                "report".to_string(),
+                "trends".to_string(),
+                "patterns".to_string(),
+                "visualization".to_string(),
+                "insights".to_string(),
+            ],
+        );
 
-        agent_keywords.insert("reviewer".to_string(), vec![
-            "review".to_string(), "check".to_string(),
-            "audit".to_string(), "validate".to_string(),
-            "test".to_string(), "verify".to_string(),
-            "quality".to_string(), "improve".to_string(),
-        ]);
+        agent_keywords.insert(
+            "planner".to_string(),
+            vec![
+                "plan".to_string(),
+                "organize".to_string(),
+                "schedule".to_string(),
+                "roadmap".to_string(),
+                "break down".to_string(),
+                "strategy".to_string(),
+                "steps".to_string(),
+                "workflow".to_string(),
+            ],
+        );
+
+        agent_keywords.insert(
+            "reviewer".to_string(),
+            vec![
+                "review".to_string(),
+                "check".to_string(),
+                "audit".to_string(),
+                "validate".to_string(),
+                "test".to_string(),
+                "verify".to_string(),
+                "quality".to_string(),
+                "improve".to_string(),
+            ],
+        );
 
         let delegate_patterns = vec![
             "in parallel".to_string(),
@@ -104,11 +142,15 @@ impl TaskDelegator {
     pub fn classify_task(&self, task: &str) -> String {
         let task_lower = task.to_lowercase();
 
-        // Check each agent type's keywords
-        for (agent_type, keywords) in &self.agent_keywords {
-            for keyword in keywords {
-                if task_lower.contains(&keyword.to_lowercase()) {
-                    return agent_type.clone();
+        // Prioritize agent types in a specific order to ensure deterministic and logical classification
+        let priority_order = vec!["researcher", "coder", "analyst", "planner", "reviewer"];
+
+        for agent_type in priority_order {
+            if let Some(keywords) = self.agent_keywords.get(agent_type) {
+                for keyword in keywords {
+                    if task_lower.contains(&keyword.to_lowercase()) {
+                        return agent_type.to_string();
+                    }
                 }
             }
         }
@@ -158,7 +200,8 @@ impl TaskDelegator {
         let has_multiple_verbs = [" and ", " then ", " after ", " before ", " while "]
             .iter()
             .filter(|sep| task.to_lowercase().contains(*sep))
-            .count() > 1;
+            .count()
+            > 1;
 
         let has_subtasks = task.contains(",") || task.contains("\n");
 
@@ -169,7 +212,10 @@ impl TaskDelegator {
     pub fn get_priority(&self, task: &str) -> TaskPriority {
         let task_lower = task.to_lowercase();
 
-        if task_lower.contains("urgent") || task_lower.contains("critical") || task_lower.contains("asap") {
+        if task_lower.contains("urgent")
+            || task_lower.contains("critical")
+            || task_lower.contains("asap")
+        {
             TaskPriority::Critical
         } else if task_lower.contains("important") || task_lower.contains("priority") {
             TaskPriority::High
@@ -264,8 +310,14 @@ mod tests {
     fn test_task_classification() {
         let delegator = TaskDelegator::new();
 
-        assert_eq!(delegator.classify_task("Research the latest AI trends"), "researcher");
-        assert_eq!(delegator.classify_task("Write code for a REST API"), "coder");
+        assert_eq!(
+            delegator.classify_task("Research the latest AI trends"),
+            "researcher"
+        );
+        assert_eq!(
+            delegator.classify_task("Write code for a REST API"),
+            "coder"
+        );
         assert_eq!(delegator.classify_task("Analyze the sales data"), "analyst");
     }
 
