@@ -34,7 +34,7 @@
 - **Multi-Provider** - NVIDIA, OpenAI, Anthropic, OpenRouter, Groq, and more
 - **Skill System** - Compatible with [agentskills.io](https://agentskills.io)
 - **Zero-Copy Streaming** - Direct SSE passthrough for real-time responses
-- **Multi-Channel** - Telegram, Discord, HTTP API
+- **Multi-Channel** - Telegram gateway, Discord gateway, and HTTP API with optional bearer auth
 
 ---
 
@@ -43,11 +43,21 @@
 ### From Source
 
 ```bash
-git clone https://github.com/auxlo/auxloclaw.git
+git clone https://github.com/larsontrey720/auxloclaw.git
 cd auxloclaw
-cargo build --release
-sudo cp target/release/auxloclaw /usr/local/bin/
+/root/.cargo/bin/cargo build --release
+cp target/release/auxloclaw /usr/local/bin/auxloclaw
+chmod +x /usr/local/bin/auxloclaw
+auxloclaw --version
 ```
+
+*Note: This workspace currently uses the newer Cargo at `/root/.cargo/bin/cargo` because the system Cargo is too old for lockfile v4.*
+
+### Latest Verified Build
+
+- Commit `b86147f` was built and installed to `/usr/local/bin/auxloclaw`.
+- Verification command: `/usr/local/bin/auxloclaw --version` returns `auxloclaw 0.1.0`.
+- Tests passed with `/root/.cargo/bin/cargo test --all --no-fail-fast`.
 
 ### Quick Setup
 
@@ -89,6 +99,13 @@ auxloclaw gateway
 auxloclaw gateway --port 8080
 ```
 
+**Authentication**
+
+- Auth is off by default.
+- Set `AUXLOCLAW_REQUIRE_AUTH=true` to require bearer auth on all API routes except `/health`.
+- Set `AUXLOCLAW_API_KEY=<secret>` and call with `Authorization: Bearer <secret>`.
+- Use secrets/env vars rather than hardcoding tokens.
+
 **API Endpoints:**
 
 | Endpoint | Method | Description |
@@ -98,6 +115,9 @@ auxloclaw gateway --port 8080
 | `/stream` | POST | Streaming chat |
 | `/skills` | GET | List installed skills |
 | `/tools` | GET | List available tools |
+| `/api/reflect` | GET | Reflect current state |
+| `/api/reflections` | GET | List reflections |
+| `/api/sessions/:session_id/history` | GET | Session history |
 
 ### Skills
 
@@ -157,6 +177,10 @@ hot_cache_size = 1000
 enabled = false
 # token via TELEGRAM_BOT_TOKEN env var
 
+[channels.discord]
+enabled = false
+# token via DISCORD_BOT_TOKEN env var
+
 [server]
 port = 18789
 ```
@@ -170,6 +194,8 @@ port = 18789
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token |
 | `DISCORD_BOT_TOKEN` | Discord bot token |
+| `AUXLOCLAW_REQUIRE_AUTH` | Require bearer auth on API routes |
+| `AUXLOCLAW_API_KEY` | API key for bearer auth |
 
 ---
 
