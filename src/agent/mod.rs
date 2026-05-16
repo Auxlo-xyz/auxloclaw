@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
+use crate::checkpoints::CheckpointManager;
 use crate::config::AppConfig;
 use crate::memory::{
     CompactionResult, Compactor, HistoryMessage, MemoryEngine, Reflection, Reflector,
@@ -44,19 +45,22 @@ pub struct AgentCore {
     compactor: Arc<Compactor>,
     reflector: Arc<Reflector>,
     plugins: Arc<PluginManager>,
+    checkpoint_manager: Arc<CheckpointManager>,
     /// Last activity timestamp per session (epoch seconds)
     last_activity: RwLock<HashMap<String, u64>>,
 }
 
 impl AgentCore {
     pub fn new(
+        // This is a hack to avoid modifying the whole signature
         memory: Arc<MemoryEngine>,
         providers: Arc<ProviderPool>,
         orchestrator: Arc<ToolOrchestrator>,
         config: AppConfig,
         session_store: Arc<SessionStore>,
         plugins: Arc<PluginManager>,
-    ) -> Self {
+        checkpoint_manager: Arc<CheckpointManager>,
+    ) -> Result<Self> {
         let persona = config.persona.clone();
         let data_dir = PathBuf::from(shellexpand::tilde(&config.memory.database_path).into_owned())
             .parent()
@@ -72,7 +76,7 @@ impl AgentCore {
         };
         let reflector = Arc::new(Reflector::new(reflector_config, data_dir));
 
-        Self {
+        Ok(Self {
             config,
             memory,
             providers,
@@ -84,8 +88,9 @@ impl AgentCore {
             compactor,
             reflector,
             plugins,
+            checkpoint_manager,
             last_activity: RwLock::new(HashMap::new()),
-        }
+        })
     }
 
     pub async fn load_sessions(&self) -> Result<()> {
@@ -556,5 +561,24 @@ impl AgentCore {
     /// Get all reflections across all sessions
     pub fn get_all_reflections(&self) -> Option<Vec<Reflection>> {
         self.reflector.load_all_reflections().ok()
+    }
+
+    pub async fn create_checkpoint(&self, session_id: &str, label: Option<&str>) -> Result<String> {
+        let sessions = self.sessions.read().await;
+        if let Some(session) = sessions.get(session_id) {
+            self.checkpoint_manager
+                .create_checkpoint(session_id, session, label)
+        } else {
+            Err(anyhow::anyhow!("Session not found: {}", session_id))
+        }
+    }
+
+    pub async fn rollback_session(&self, session_id: &str, checkpoint_id: &str) -> Result<()> {
+        let history = self
+            .checkpoint_manager
+            .rollback(session_id, checkpoint_id)?;
+        let mut sessions = self.sessions.write().await;
+        sessions.insert(session_id.to_string(), history);
+        Ok(())
     }
 }
