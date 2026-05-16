@@ -96,7 +96,7 @@ pub enum ConfigCommands {
     Set {
         /// Configuration key (e.g., "agent.temperature")
         key: String,
-        
+
         /// Configuration value
         value: String,
     },
@@ -140,11 +140,11 @@ pub enum SkillCommands {
     Install {
         /// Skill name to install from registry
         name: Option<String>,
-        
+
         /// Install from GitHub URL
         #[arg(short, long)]
         url: Option<String>,
-        
+
         /// Install from git repository
         #[arg(short, long)]
         git: Option<String>,
@@ -160,7 +160,7 @@ pub enum SkillCommands {
     Create {
         /// Skill name
         name: String,
-        
+
         /// Description
         #[arg(short = 't', long)]
         description: Option<String>,
@@ -180,42 +180,77 @@ pub enum SkillCommands {
         /// Skill name
         name: String,
     },
+
+    /// Manage skill registry taps
+    Tap {
+        #[command(subcommand)]
+        action: SkillTapCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SkillTapCommands {
+    /// List configured skill taps
+    List,
+
+    /// Add a skill tap manifest URL
+    Add {
+        /// Tap name
+        name: String,
+
+        /// Manifest URL
+        url: String,
+
+        /// Optional manifest sha256 checksum
+        #[arg(long)]
+        sha256: Option<String>,
+
+        /// Higher priority taps win on duplicate skill names
+        #[arg(long, default_value_t = 0)]
+        priority: i32,
+    },
+
+    /// Remove a skill tap
+    Remove {
+        /// Tap name
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
 pub enum ProviderCommands {
     /// List all available providers
     List,
-    
+
     /// Show current active provider
     Active,
-    
+
     /// Switch to a different provider
     Use {
         /// Provider name to switch to
         name: String,
     },
-    
+
     /// Add a new provider
     Add {
         /// Provider name
         name: String,
-        
+
         /// API base URL
         #[arg(long)]
         base: String,
-        
+
         /// API key (will prompt if not provided)
         #[arg(short, long)]
         key: Option<String>,
     },
-    
+
     /// Remove a provider
     Remove {
         /// Provider name to remove
         name: String,
     },
-    
+
     /// Test provider connection
     Test {
         /// Provider name (tests all if not specified)
@@ -248,15 +283,15 @@ pub enum PersonaCommands {
         /// Length: concise, balanced, detailed
         #[arg(short, long)]
         length: Option<String>,
-        
+
         /// Tone: professional, casual, technical, friendly
         #[arg(short, long)]
         tone: Option<String>,
-        
+
         /// No em dashes
         #[arg(long)]
         no_em_dashes: bool,
-        
+
         /// No emojis
         #[arg(long)]
         no_emojis: bool,

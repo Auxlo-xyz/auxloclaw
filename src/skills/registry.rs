@@ -3,6 +3,7 @@
 use anyhow::{bail, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -35,21 +36,116 @@ pub struct RegistryManifest {
     pub categories: HashMap<String, String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SkillTap {
+    pub name: String,
+    pub url: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default)]
+    pub sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SkillTapConfig {
+    pub version: String,
+    pub taps: Vec<SkillTap>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for SkillTapConfig {
+    fn default() -> Self {
+        Self {
+            version: "1".into(),
+            taps: vec![SkillTap {
+                name: "auxlo".into(),
+                url: REGISTRY_URL.into(),
+                enabled: true,
+                priority: 100,
+                sha256: None,
+            }],
+        }
+    }
+}
+
 /// Skill registry client
 pub struct SkillRegistry {
     client: Client,
     cache: Vec<RegistrySkill>,
+    taps_path: PathBuf,
 }
 
 impl SkillRegistry {
     pub fn new() -> Self {
+        let taps_path = dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("auxloclaw")
+            .join("skill-taps.json");
+
         Self {
             client: Client::builder()
                 .timeout(Duration::from_secs(10))
                 .build()
                 .unwrap_or_else(|_| Client::new()),
             cache: Vec::new(),
+            taps_path,
         }
+    }
+
+    pub fn tap_path(&self) -> &std::path::Path {
+        &self.taps_path
+    }
+
+    pub fn load_taps(&self) -> Result<SkillTapConfig> {
+        if !self.taps_path.exists() {
+            return Ok(SkillTapConfig::default());
+        }
+        let content = fs::read_to_string(&self.taps_path)?;
+        Ok(serde_json::from_str(&content)?)
+    }
+
+    pub fn save_taps(&self, config: &SkillTapConfig) -> Result<()> {
+        if let Some(parent) = self.taps_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&self.taps_path, serde_json::to_string_pretty(config)?)?;
+        Ok(())
+    }
+
+    pub fn add_tap(
+        &self,
+        name: &str,
+        url: &str,
+        sha256: Option<String>,
+        priority: i32,
+    ) -> Result<()> {
+        let mut config = self.load_taps()?;
+        if config.taps.iter().any(|tap| tap.name == name) {
+            bail!("Skill tap '{}' already exists", name);
+        }
+        config.taps.push(SkillTap {
+            name: name.to_string(),
+            url: url.to_string(),
+            enabled: true,
+            priority,
+            sha256,
+        });
+        self.save_taps(&config)
+    }
+
+    pub fn remove_tap(&self, name: &str) -> Result<()> {
+        let mut config = self.load_taps()?;
+        let before = config.taps.len();
+        config.taps.retain(|tap| tap.name != name);
+        if config.taps.len() == before {
+            bail!("Skill tap '{}' not found", name);
+        }
+        self.save_taps(&config)
     }
 
     /// View a skill from local skills directory
@@ -98,9 +194,7 @@ impl SkillRegistry {
                             // Write updated content
                             let new_content = format!(
                                 "---\nname: {}\ndescription: {}\n---\n{}",
-                                skill.meta.name,
-                                skill.meta.description,
-                                body
+                                skill.meta.name, skill.meta.description, body
                             );
                             fs::write(entry.path(), new_content)?;
                             return Ok(());
@@ -144,12 +238,15 @@ impl SkillRegistry {
         }
 
         let query_lower = query.to_lowercase();
-        let results: Vec<RegistrySkill> = self.cache
+        let results: Vec<RegistrySkill> = self
+            .cache
             .iter()
             .filter(|s| {
-                s.name.contains(&query_lower) ||
-                s.description.to_lowercase().contains(&query_lower) ||
-                s.tags.iter().any(|t| t.to_lowercase().contains(&query_lower))
+                s.name.contains(&query_lower)
+                    || s.description.to_lowercase().contains(&query_lower)
+                    || s.tags
+                        .iter()
+                        .any(|t| t.to_lowercase().contains(&query_lower))
             })
             .cloned()
             .collect();
@@ -181,26 +278,72 @@ impl SkillRegistry {
             self.cache = self.fetch_registry().await?;
         }
 
-        Ok(self.cache
+        Ok(self
+            .cache
             .iter()
             .filter(|s| s.category == category)
             .cloned()
             .collect())
     }
 
-    /// Fetch registry from remote
+    /// Fetch registries from enabled taps with deterministic de-duplication.
     async fn fetch_registry(&self) -> Result<Vec<RegistrySkill>> {
-        // Try official registry first
-        if let Ok(response) = self.client.get(REGISTRY_URL).send().await {
-            if response.status().is_success() {
-                if let Ok(manifest) = response.json::<RegistryManifest>().await {
-                    return Ok(manifest.skills);
+        let mut taps = self.load_taps()?.taps;
+        taps.retain(|tap| tap.enabled);
+        taps.sort_by(|a, b| {
+            b.priority
+                .cmp(&a.priority)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+
+        let mut merged: HashMap<String, RegistrySkill> = HashMap::new();
+        for tap in taps {
+            match self.fetch_tap_manifest(&tap).await {
+                Ok(manifest) => {
+                    for skill in manifest.skills {
+                        merged.entry(skill.name.clone()).or_insert(skill);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to fetch skill tap '{}': {}", tap.name, e);
                 }
             }
         }
 
-        // Fallback to built-in skill list
-        Ok(self.get_builtin_skills())
+        if merged.is_empty() {
+            return Ok(self.get_builtin_skills());
+        }
+
+        let mut skills: Vec<RegistrySkill> = merged.into_values().collect();
+        skills.sort_by(|a, b| {
+            a.category
+                .cmp(&b.category)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        Ok(skills)
+    }
+
+    async fn fetch_tap_manifest(&self, tap: &SkillTap) -> Result<RegistryManifest> {
+        let bytes = self
+            .client
+            .get(&tap.url)
+            .send()
+            .await?
+            .error_for_status()?
+            .bytes()
+            .await?;
+        if let Some(expected) = &tap.sha256 {
+            let actual = format!("{:x}", Sha256::digest(&bytes));
+            if !actual.eq_ignore_ascii_case(expected) {
+                bail!(
+                    "checksum mismatch for tap '{}': expected {}, got {}",
+                    tap.name,
+                    expected,
+                    actual
+                );
+            }
+        }
+        Ok(serde_json::from_slice(&bytes)?)
     }
 
     /// Built-in skills that come with AUXLOCLAW
@@ -210,7 +353,9 @@ impl SkillRegistry {
                 name: "code-review".into(),
                 description: "Perform thorough code reviews with security and quality focus".into(),
                 category: "software-development".into(),
-                github_url: "https://github.com/auxlo/skills/tree/main/software-development/code-review".into(),
+                github_url:
+                    "https://github.com/auxlo/skills/tree/main/software-development/code-review"
+                        .into(),
                 author: "auxlo".into(),
                 version: "1.0.0".into(),
                 compatibility: None,
@@ -230,7 +375,8 @@ impl SkillRegistry {
                 name: "fine-tuning-axolotl".into(),
                 description: "Expert guidance for fine-tuning LLMs with Axolotl".into(),
                 category: "mlops".into(),
-                github_url: "https://github.com/auxlo/skills/tree/main/mlops/fine-tuning-axolotl".into(),
+                github_url: "https://github.com/auxlo/skills/tree/main/mlops/fine-tuning-axolotl"
+                    .into(),
                 author: "auxlo".into(),
                 version: "1.0.0".into(),
                 compatibility: None,
@@ -240,7 +386,8 @@ impl SkillRegistry {
                 name: "test-driven-development".into(),
                 description: "Enforce RED-GREEN-REFACTOR cycle with test-first approach".into(),
                 category: "software-development".into(),
-                github_url: "https://github.com/auxlo/skills/tree/main/software-development/tdd".into(),
+                github_url: "https://github.com/auxlo/skills/tree/main/software-development/tdd"
+                    .into(),
                 author: "auxlo".into(),
                 version: "1.0.0".into(),
                 compatibility: None,
@@ -250,11 +397,17 @@ impl SkillRegistry {
                 name: "systematic-debugging".into(),
                 description: "4-phase root cause investigation methodology".into(),
                 category: "software-development".into(),
-                github_url: "https://github.com/auxlo/skills/tree/main/software-development/debugging".into(),
+                github_url:
+                    "https://github.com/auxlo/skills/tree/main/software-development/debugging"
+                        .into(),
                 author: "auxlo".into(),
                 version: "1.0.0".into(),
                 compatibility: None,
-                tags: vec!["debugging".into(), "investigation".into(), "root-cause".into()],
+                tags: vec![
+                    "debugging".into(),
+                    "investigation".into(),
+                    "root-cause".into(),
+                ],
             },
             RegistrySkill {
                 name: "web-scraping".into(),
@@ -270,7 +423,8 @@ impl SkillRegistry {
                 name: "api-integration".into(),
                 description: "Integrate with external APIs and services".into(),
                 category: "software-development".into(),
-                github_url: "https://github.com/auxlo/skills/tree/main/software-development/api".into(),
+                github_url: "https://github.com/auxlo/skills/tree/main/software-development/api"
+                    .into(),
                 author: "auxlo".into(),
                 version: "1.0.0".into(),
                 compatibility: None,
@@ -278,9 +432,11 @@ impl SkillRegistry {
             },
             RegistrySkill {
                 name: "git-workflow".into(),
-                description: "Git branching strategies, commit conventions, and PR workflows".into(),
+                description: "Git branching strategies, commit conventions, and PR workflows"
+                    .into(),
                 category: "software-development".into(),
-                github_url: "https://github.com/auxlo/skills/tree/main/software-development/git".into(),
+                github_url: "https://github.com/auxlo/skills/tree/main/software-development/git"
+                    .into(),
                 author: "auxlo".into(),
                 version: "1.0.0".into(),
                 compatibility: None,
@@ -310,50 +466,70 @@ impl SkillRegistry {
     }
 
     /// Install a skill from GitHub URL
-    pub async fn install_from_github(&self, url: &str, skills_dir: &std::path::Path) -> Result<String> {
+    pub async fn install_from_github(
+        &self,
+        url: &str,
+        skills_dir: &std::path::Path,
+    ) -> Result<String> {
         // Parse GitHub URL to get repo and path
         let (owner, repo, path) = parse_github_url(url)?;
-        
+
         // Fetch SKILL.md content
-        let skill_url = format!("https://raw.githubusercontent.com/{}/{}/main/{}/SKILL.md", owner, repo, path);
-        
+        let skill_url = format!(
+            "https://raw.githubusercontent.com/{}/{}/main/{}/SKILL.md",
+            owner, repo, path
+        );
+
         let response = self.client.get(&skill_url).send().await?;
-        
+
         if !response.status().is_success() {
             bail!("Failed to fetch skill from GitHub: {}", response.status());
         }
 
         let content = response.text().await?;
-        
+
         // Parse skill name from frontmatter
         let skill_name = extract_skill_name(&content)?;
-        
+
         // Create skill directory
         let skill_dir = skills_dir.join(&skill_name);
         std::fs::create_dir_all(&skill_dir)?;
-        
+
         // Write SKILL.md
         std::fs::write(skill_dir.join("SKILL.md"), content)?;
-        
+
         // Try to fetch additional files (scripts, references)
-        self.fetch_skill_assets(&owner, &repo, &path, &skill_dir).await?;
-        
+        self.fetch_skill_assets(&owner, &repo, &path, &skill_dir)
+            .await?;
+
         Ok(skill_name)
     }
 
-    async fn fetch_skill_assets(&self, owner: &str, repo: &str, path: &str, skill_dir: &std::path::Path) -> Result<()> {
+    async fn fetch_skill_assets(
+        &self,
+        owner: &str,
+        repo: &str,
+        path: &str,
+        skill_dir: &std::path::Path,
+    ) -> Result<()> {
         // Try to fetch scripts directory
-        let scripts_url = format!("https://api.github.com/repos/{}/{}/contents/{}/scripts", owner, repo, path);
-        
+        let scripts_url = format!(
+            "https://api.github.com/repos/{}/{}/contents/{}/scripts",
+            owner, repo, path
+        );
+
         if let Ok(response) = self.client.get(&scripts_url).send().await {
             if response.status().is_success() {
                 if let Ok(files) = response.json::<Vec<GitHubContent>>().await {
                     std::fs::create_dir_all(skill_dir.join("scripts"))?;
-                    
+
                     for file in files {
                         if file.r#type == "file" {
                             if let Ok(content) = self.fetch_file_content(&file.download_url).await {
-                                std::fs::write(skill_dir.join("scripts").join(&file.name), content)?;
+                                std::fs::write(
+                                    skill_dir.join("scripts").join(&file.name),
+                                    content,
+                                )?;
                             }
                         }
                     }
@@ -362,17 +538,23 @@ impl SkillRegistry {
         }
 
         // Try to fetch references directory
-        let refs_url = format!("https://api.github.com/repos/{}/{}/contents/{}/references", owner, repo, path);
-        
+        let refs_url = format!(
+            "https://api.github.com/repos/{}/{}/contents/{}/references",
+            owner, repo, path
+        );
+
         if let Ok(response) = self.client.get(&refs_url).send().await {
             if response.status().is_success() {
                 if let Ok(files) = response.json::<Vec<GitHubContent>>().await {
                     std::fs::create_dir_all(skill_dir.join("references"))?;
-                    
+
                     for file in files {
                         if file.r#type == "file" {
                             if let Ok(content) = self.fetch_file_content(&file.download_url).await {
-                                std::fs::write(skill_dir.join("references").join(&file.name), content)?;
+                                std::fs::write(
+                                    skill_dir.join("references").join(&file.name),
+                                    content,
+                                )?;
                             }
                         }
                     }
@@ -402,44 +584,80 @@ fn parse_github_url(url: &str) -> Result<(String, String, String)> {
     // Handle various GitHub URL formats
     // https://github.com/owner/repo/tree/main/path/to/skill
     // https://github.com/owner/repo
-    
+
     let url = url.trim_end_matches('/');
-    
+
     if url.starts_with("https://github.com/") {
-        let parts: Vec<&str> = url.strip_prefix("https://github.com/")
+        let parts: Vec<&str> = url
+            .strip_prefix("https://github.com/")
             .unwrap_or("")
             .split('/')
             .collect();
-        
+
         if parts.len() >= 2 {
             let owner = parts[0].to_string();
             let repo = parts[1].to_string();
-            
+
             // Find path after /tree/main/ or /blob/main/
             let path = if parts.len() > 4 && (parts[2] == "tree" || parts[2] == "blob") {
                 parts[4..].join("/")
             } else {
                 String::new()
             };
-            
+
             return Ok((owner, repo, path));
         }
     }
-    
+
     bail!("Invalid GitHub URL format: {}", url)
 }
 
 /// Extract skill name from SKILL.md frontmatter
 fn extract_skill_name(content: &str) -> Result<String> {
-    if let Some(frontmatter) = content.strip_prefix("---").and_then(|s| s.split("---").next()) {
+    if let Some(frontmatter) = content
+        .strip_prefix("---")
+        .and_then(|s| s.split("---").next())
+    {
         for line in frontmatter.lines() {
             if let Some(name) = line.strip_prefix("name:") {
                 return Ok(name.trim().to_string());
             }
         }
     }
-    
+
     bail!("Could not extract skill name from frontmatter")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_taps_include_auxlo_registry() {
+        let config = SkillTapConfig::default();
+        assert_eq!(config.taps.len(), 1);
+        assert_eq!(config.taps[0].name, "auxlo");
+        assert_eq!(config.taps[0].url, REGISTRY_URL);
+        assert!(config.taps[0].enabled);
+    }
+
+    #[test]
+    fn tap_config_round_trips_json() {
+        let config = SkillTapConfig {
+            version: "1".into(),
+            taps: vec![SkillTap {
+                name: "community".into(),
+                url: "https://example.com/manifest.json".into(),
+                enabled: true,
+                priority: 10,
+                sha256: Some("abc".into()),
+            }],
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: SkillTapConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.taps[0].name, "community");
+        assert_eq!(parsed.taps[0].sha256.as_deref(), Some("abc"));
+    }
 }
 
 impl Default for SkillRegistry {

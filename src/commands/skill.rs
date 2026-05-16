@@ -4,13 +4,13 @@ use anyhow::{bail, Result};
 use std::fs;
 use std::path::PathBuf;
 
-use crate::skills::{SkillInstaller, registry::SkillRegistry};
+use crate::skills::{registry::SkillRegistry, SkillInstaller};
 
 pub async fn handle_skill(action: crate::cli::SkillCommands) -> Result<()> {
     let config_dir = dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("auxloclaw");
-    
+
     let skills_dir = config_dir.join("skills");
     fs::create_dir_all(&skills_dir)?;
 
@@ -19,7 +19,7 @@ pub async fn handle_skill(action: crate::cli::SkillCommands) -> Result<()> {
     match action {
         crate::cli::SkillCommands::List { detailed } => {
             println!("\n📚 Installed Skills\n");
-            
+
             let mut count = 0;
             for entry in walkdir::WalkDir::new(&skills_dir)
                 .min_depth(2)
@@ -39,7 +39,9 @@ pub async fn handle_skill(action: crate::cli::SkillCommands) -> Result<()> {
                                 }
                                 println!();
                             } else {
-                                println!("  {} - {}", skill.name(), 
+                                println!(
+                                    "  {} - {}",
+                                    skill.name(),
                                     if skill.description().len() > 60 {
                                         format!("{}...", &skill.description()[..57])
                                     } else {
@@ -52,15 +54,16 @@ pub async fn handle_skill(action: crate::cli::SkillCommands) -> Result<()> {
                     }
                 }
             }
-            
+
             println!("\n{} skills found.\n", count);
         }
 
         crate::cli::SkillCommands::Search { query } => {
             println!("\n🔍 Searching registry for: '{}'\n", query);
-            
-            let results: Vec<crate::skills::registry::RegistrySkill> = installer.search(&query).await?;
-            
+
+            let results: Vec<crate::skills::registry::RegistrySkill> =
+                installer.search(&query).await?;
+
             if results.is_empty() {
                 println!("No skills found matching '{}'\n", query);
                 println!("💡 Try different keywords or browse all: auxloclaw skill browse");
@@ -73,13 +76,16 @@ pub async fn handle_skill(action: crate::cli::SkillCommands) -> Result<()> {
                     };
                     println!("  [{}] {} - {}", installed, skill.name, skill.description);
                 }
-                println!("\n{} results. Install with: auxloclaw skill install <name>\n", results.len());
+                println!(
+                    "\n{} results. Install with: auxloclaw skill install <name>\n",
+                    results.len()
+                );
             }
         }
 
         crate::cli::SkillCommands::Install { name, url, git } => {
             println!();
-            
+
             if let Some(url) = url {
                 println!("📥 Installing from URL: {}", url);
                 match installer.install_from_url(&url).await {
@@ -149,11 +155,12 @@ pub async fn handle_skill(action: crate::cli::SkillCommands) -> Result<()> {
 
         crate::cli::SkillCommands::Browse => {
             println!("\n🌐 Available Skills in Registry\n");
-            
+
             let skills = installer.list_available().await?;
-            
+
             // Group by category
-            let mut by_category: std::collections::HashMap<String, Vec<_>> = std::collections::HashMap::new();
+            let mut by_category: std::collections::HashMap<String, Vec<_>> =
+                std::collections::HashMap::new();
             for skill in skills {
                 by_category
                     .entry(skill.category.clone())
@@ -164,8 +171,15 @@ pub async fn handle_skill(action: crate::cli::SkillCommands) -> Result<()> {
             for (category, skills) in by_category {
                 println!("\n📁 {}", category);
                 for skill in skills {
-                    let installed = if installer.is_installed(&skill.name) { "✓" } else { " " };
-                    println!("  [{}] {} - {}", installed, skill.name, 
+                    let installed = if installer.is_installed(&skill.name) {
+                        "✓"
+                    } else {
+                        " "
+                    };
+                    println!(
+                        "  [{}] {} - {}",
+                        installed,
+                        skill.name,
                         if skill.description.len() > 50 {
                             format!("{}...", &skill.description[..47])
                         } else {
@@ -180,14 +194,14 @@ pub async fn handle_skill(action: crate::cli::SkillCommands) -> Result<()> {
 
         crate::cli::SkillCommands::Info { name } => {
             println!();
-            
+
             let skill_path = find_skill(&skills_dir, &name)?;
             let content = fs::read_to_string(&skill_path)?;
             let skill = crate::skills::Skill::parse(&content)?;
 
             println!("📦 {}\n", skill.name());
             println!("{}\n", skill.description());
-            
+
             if let Some(cat) = &skill.meta.category {
                 println!("Category: {}", cat);
             }
@@ -200,6 +214,38 @@ pub async fn handle_skill(action: crate::cli::SkillCommands) -> Result<()> {
 
             println!("\n{}\n", "─".repeat(50));
             println!("{}\n", skill.body);
+        }
+
+        crate::cli::SkillCommands::Tap { action } => {
+            let registry = SkillRegistry::new();
+            match action {
+                crate::cli::SkillTapCommands::List => {
+                    let config = registry.load_taps()?;
+                    println!("\n🔌 Skill Registry Taps\n");
+                    for tap in config.taps {
+                        let status = if tap.enabled { "enabled" } else { "disabled" };
+                        let checksum = tap.sha256.as_deref().unwrap_or("none");
+                        println!(
+                            "  {} [{}] priority={} sha256={}\n    {}",
+                            tap.name, status, tap.priority, checksum, tap.url
+                        );
+                    }
+                    println!("\nConfig: {}\n", registry.tap_path().display());
+                }
+                crate::cli::SkillTapCommands::Add {
+                    name,
+                    url,
+                    sha256,
+                    priority,
+                } => {
+                    registry.add_tap(&name, &url, sha256, priority)?;
+                    println!("✓ Added skill tap '{}'", name);
+                }
+                crate::cli::SkillTapCommands::Remove { name } => {
+                    registry.remove_tap(&name)?;
+                    println!("✓ Removed skill tap '{}'", name);
+                }
+            }
         }
     }
 
@@ -223,6 +269,6 @@ fn find_skill(skills_dir: &PathBuf, name: &str) -> Result<PathBuf> {
             }
         }
     }
-    
+
     bail!("Skill '{}' not found", name)
 }

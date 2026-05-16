@@ -3,6 +3,7 @@
 mod agent;
 mod auth;
 mod channels;
+mod checkpoints;
 mod cli;
 mod commands;
 mod config;
@@ -19,6 +20,7 @@ mod skills;
 mod streaming;
 mod tools;
 
+use crate::checkpoints::CheckpointManager;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -147,6 +149,7 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
 
     // Initialize persistent session store
     let session_store = Arc::new(memory::SessionStore::new(&session_db)?);
+    let checkpoint_manager = Arc::new(CheckpointManager::new(&session_db)?);
 
     plugins.run_lifecycle(plugins::HookEvent::Startup).await;
 
@@ -157,7 +160,8 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
         config.clone(),
         session_store,
         plugins.clone(),
-    ));
+        checkpoint_manager.clone(),
+    )?);
 
     // Load persisted sessions
     agent.load_sessions().await?;

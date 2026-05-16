@@ -197,6 +197,21 @@ port = 18789
 | `AUXLOCLAW_REQUIRE_AUTH` | Require bearer auth on API routes |
 | `AUXLOCLAW_API_KEY` | API key for bearer auth |
 
+### Skills Hub / Taps
+
+AUXLOCLAW can merge skills from multiple registry manifests, called taps. The official Auxlo registry is enabled by default and custom taps live in `~/.config/auxloclaw/skill-taps.json`.
+
+```bash
+auxloclaw skill tap list
+auxloclaw skill tap add community https://example.com/manifest.json --priority 10
+auxloclaw skill tap add pinned https://example.com/manifest.json --sha256 <manifest-sha256>
+auxloclaw skill tap remove community
+auxloclaw skill search debugging
+auxloclaw skill browse
+```
+
+Higher-priority taps win when two taps publish the same skill name. Optional `sha256` pins protect tap manifests from unexpected changes.
+
 ### Plugin Hooks
 
 AUXLOCLAW can run external plugin commands on lifecycle events. Plugins receive one JSON object on stdin and may return a JSON object on stdout to rewrite messages, rewrite tool args, or cancel tools.

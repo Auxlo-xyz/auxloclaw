@@ -1,5 +1,6 @@
 //! Chat command handler
 
+use crate::checkpoints::CheckpointManager;
 use crate::plugins::PluginManager;
 use anyhow::Result;
 use dialoguer::{theme::ColorfulTheme, History, Input};
@@ -28,6 +29,7 @@ pub async fn handle_chat(
     // Initialize session store
     let session_db = shellexpand::tilde(&config.memory.database_path).into_owned();
     let session_store = Arc::new(crate::memory::SessionStore::new(&session_db)?);
+    let checkpoint_manager = Arc::new(CheckpointManager::new(&session_db)?);
 
     let agent = Arc::new(crate::agent::AgentCore::new(
         memory,
@@ -36,7 +38,8 @@ pub async fn handle_chat(
         config.clone(),
         session_store,
         plugins.clone(),
-    ));
+        checkpoint_manager.clone(),
+    )?);
 
     match message {
         Some(msg) => {
