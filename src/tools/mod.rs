@@ -1,3 +1,4 @@
+pub mod approval;
 pub mod builtin;
 pub mod executor;
 pub mod web;

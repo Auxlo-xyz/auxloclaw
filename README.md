@@ -199,6 +199,15 @@ port = 18789
 
 ---
 
+## Tool Approval Policy
+
+- `AUXLOCLAW_APPROVAL_MODE=smart|manual|off`
+- default is smart
+- smart blocks critical destructive patterns, requires approval for high-risk shell/network commands, and blocks private/local URLs for URL-capable tools to reduce SSRF risk
+- blocked tool calls return structured JSON with `requires_approval`, `risk`, and `reason`
+
+---
+
 ## Skill Development
 
 Skills are markdown-based instruction sets compatible with [agentskills.io](https://agentskills.io/specification).
