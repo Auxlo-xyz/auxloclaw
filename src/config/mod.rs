@@ -20,6 +20,7 @@ pub struct AppConfig {
     pub tools: ToolsConfig,
     pub mcp: McpConfig,
     pub scheduler: SchedulerConfig,
+    pub plugins: PluginsConfig,
     pub server: ServerConfig,
 }
 
@@ -379,6 +380,57 @@ impl Default for ToolsConfig {
             web_search_provider: "brave".into(),
             web_search_api_key: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PluginsConfig {
+    pub enabled: bool,
+    pub timeout_secs: u64,
+    pub plugins: Vec<PluginConfig>,
+}
+
+impl Default for PluginsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            timeout_secs: 10,
+            plugins: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PluginConfig {
+    pub name: String,
+    pub enabled: bool,
+    pub command: String,
+    pub args: Vec<String>,
+    pub hooks: Vec<String>,
+    pub timeout_secs: Option<u64>,
+}
+
+impl Default for PluginConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            enabled: true,
+            command: String::new(),
+            args: Vec::new(),
+            hooks: Vec::new(),
+            timeout_secs: None,
+        }
+    }
+}
+
+impl PluginConfig {
+    pub fn has_hook(&self, event: crate::plugins::HookEvent) -> bool {
+        self.hooks
+            .iter()
+            .filter_map(|hook| crate::plugins::HookEvent::from_str(hook))
+            .any(|hook| hook == event)
     }
 }
 

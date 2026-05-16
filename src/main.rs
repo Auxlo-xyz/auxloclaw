@@ -12,6 +12,7 @@ mod mcp;
 mod memory;
 mod orchestrator;
 mod persona;
+mod plugins;
 mod providers;
 mod scheduler;
 mod skills;
@@ -133,7 +134,12 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     // Initialize core components
     let memory = Arc::new(memory::MemoryEngine::new(&config.memory)?);
     let providers = Arc::new(providers::ProviderPool::new(config.providers.clone()));
-    let orchestrator = Arc::new(orchestrator::ToolOrchestrator::new());
+    let mut raw_orchestrator = orchestrator::ToolOrchestrator::new();
+    let mut raw_plugins = plugins::PluginManager::new(config.plugins.clone());
+    raw_plugins.set_tools(raw_orchestrator.list_tools());
+    let plugins = Arc::new(raw_plugins);
+    raw_orchestrator.set_plugins(plugins.clone());
+    let orchestrator = Arc::new(raw_orchestrator);
     if config.mcp.enabled {
         let count = orchestrator.register_mcp_tools(&config.mcp).await?;
         info!("🔌 Registered {} MCP tools", count);
@@ -142,12 +148,15 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     // Initialize persistent session store
     let session_store = Arc::new(memory::SessionStore::new(&session_db)?);
 
+    plugins.run_lifecycle(plugins::HookEvent::Startup).await;
+
     let agent = Arc::new(agent::AgentCore::new(
         memory,
         providers,
         orchestrator,
         config.clone(),
         session_store,
+        plugins.clone(),
     ));
 
     // Load persisted sessions

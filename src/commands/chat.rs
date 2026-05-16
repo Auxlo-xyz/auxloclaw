@@ -1,7 +1,8 @@
 //! Chat command handler
 
+use crate::plugins::PluginManager;
 use anyhow::Result;
-use dialoguer::{theme::ColorfulTheme, Input, History};
+use dialoguer::{theme::ColorfulTheme, History, Input};
 use std::sync::Arc;
 
 pub async fn handle_chat(
@@ -13,25 +14,30 @@ pub async fn handle_chat(
     let config_path = dirs::home_dir()
         .map(|h| h.join(".auxloclaw/config.toml"))
         .ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?;
-    let config = crate::config::AppConfig::load(config_path.to_str().unwrap_or("~/.auxloclaw/config.toml"))?;
-    
+    let config =
+        crate::config::AppConfig::load(config_path.to_str().unwrap_or("~/.auxloclaw/config.toml"))?;
+
     // Initialize components
     let memory = Arc::new(crate::memory::MemoryEngine::new(&config.memory)?);
-    let providers = Arc::new(crate::providers::ProviderPool::new(config.providers.clone()));
+    let providers = Arc::new(crate::providers::ProviderPool::new(
+        config.providers.clone(),
+    ));
+    let plugins = Arc::new(PluginManager::new(config.plugins.clone()));
     let orchestrator = Arc::new(crate::orchestrator::ToolOrchestrator::new());
-    
+
     // Initialize session store
     let session_db = shellexpand::tilde(&config.memory.database_path).into_owned();
     let session_store = Arc::new(crate::memory::SessionStore::new(&session_db)?);
-    
+
     let agent = Arc::new(crate::agent::AgentCore::new(
         memory,
         providers,
         orchestrator,
         config.clone(),
         session_store,
+        plugins.clone(),
     ));
-    
+
     match message {
         Some(msg) => {
             // One-shot mode (no history)
@@ -41,15 +47,16 @@ pub async fn handle_chat(
         None => {
             // Interactive mode with history
             println!("\n🦞 AUXLOCLAW Chat (type 'exit' to quit, 'help' for commands)\n");
-            
+
             let mut history = dialoguer::BasicHistory::new();
-            
+
             loop {
-                let input: String = dialoguer::Input::with_theme(&dialoguer::theme::ColorfulTheme::default())
-                    .with_prompt("You")
-                    .history_with(&mut history)
-                    .interact_text()?;
-                
+                let input: String =
+                    dialoguer::Input::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                        .with_prompt("You")
+                        .history_with(&mut history)
+                        .interact_text()?;
+
                 match input.trim() {
                     "exit" | "quit" | "q" => {
                         println!("Goodbye!");
@@ -80,13 +87,13 @@ pub async fn handle_chat(
                     "" => continue,
                     _ => {}
                 }
-                
+
                 // Process message with CLI session (history enabled)
                 let response = agent.process(&input, None).await;
                 println!("\n{}\n", response);
             }
         }
     }
-    
+
     Ok(())
 }

@@ -197,6 +197,35 @@ port = 18789
 | `AUXLOCLAW_REQUIRE_AUTH` | Require bearer auth on API routes |
 | `AUXLOCLAW_API_KEY` | API key for bearer auth |
 
+### Plugin Hooks
+
+AUXLOCLAW can run external plugin commands on lifecycle events. Plugins receive one JSON object on stdin and may return a JSON object on stdout to rewrite messages, rewrite tool args, or cancel tools.
+
+```toml
+[plugins]
+enabled = true
+timeout_secs = 10
+
+[[plugins.plugins]]
+name = "audit-log"
+enabled = true
+command = "python3"
+args = ["/home/workspace/auxloclaw/plugins/audit.py"]
+hooks = ["startup", "before_message", "after_message", "before_tool", "after_tool"]
+timeout_secs = 5
+```
+
+Supported hooks: `startup`, `before_message`, `after_message`, `before_tool`, `after_tool`, `shutdown`.
+
+Hook output examples:
+
+```json
+{"message":"rewritten user message"}
+{"response":"rewritten assistant response"}
+{"tool_args":{"code":"echo safe"}}
+{"cancel":true,"error":"blocked by plugin"}
+```
+
 ### Cron Scheduler
 
 AUXLOCLAW can run autonomous recurring jobs inside the gateway process.

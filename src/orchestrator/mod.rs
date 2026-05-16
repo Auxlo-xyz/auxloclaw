@@ -5,6 +5,8 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use crate::plugins::{plugin_result_error, SharedPluginManager};
+
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
@@ -13,6 +15,7 @@ pub trait Tool: Send + Sync {
     async fn execute(&self, args: serde_json::Value) -> Result<ToolResult>;
 }
 
+#[derive(Debug, Clone, Serialize)]
 pub struct ToolResult {
     pub tool_name: String,
     pub success: bool,
@@ -21,11 +24,20 @@ pub struct ToolResult {
     pub duration_ms: u64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolSpec {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ToolDefinition {
     pub tool_type: String,
     pub function: FunctionDef,
 }
 
+#[derive(Debug, Clone, Serialize)]
 pub struct FunctionDef {
     pub name: String,
     pub description: String,
@@ -35,6 +47,7 @@ pub struct FunctionDef {
 pub struct ToolOrchestrator {
     registry: DashMap<String, Arc<dyn Tool>>,
     approval_policy: crate::tools::approval::ApprovalPolicy,
+    plugins: Option<SharedPluginManager>,
 }
 
 impl ToolOrchestrator {
@@ -42,6 +55,7 @@ impl ToolOrchestrator {
         let orch = Self {
             registry: DashMap::new(),
             approval_policy: crate::tools::approval::ApprovalPolicy::from_env(),
+            plugins: None,
         };
         orch.register_builtin();
         orch
@@ -80,8 +94,23 @@ impl ToolOrchestrator {
         Ok(count)
     }
 
+    pub fn set_plugins(&mut self, plugins: SharedPluginManager) {
+        self.plugins = Some(plugins);
+    }
+
     pub fn register(&self, tool: Arc<dyn Tool>) {
         self.registry.insert(tool.name().to_string(), tool);
+    }
+
+    pub fn list_tools(&self) -> Vec<ToolSpec> {
+        self.registry
+            .iter()
+            .map(|t| ToolSpec {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+                parameters: t.parameters(),
+            })
+            .collect()
     }
 
     pub fn get_definitions(&self) -> Vec<ToolDefinition> {
@@ -98,8 +127,18 @@ impl ToolOrchestrator {
             .collect()
     }
 
-    pub async fn execute_tool(&self, name: &str, args: serde_json::Value) -> ToolResult {
+    pub async fn execute_tool(&self, name: &str, mut args: serde_json::Value) -> ToolResult {
         let start = std::time::Instant::now();
+
+        if let Some(plugins) = &self.plugins {
+            match plugins.process_before_tool(name, args.clone()).await {
+                Ok((true, _)) => {
+                    return plugin_result_error(name, format!("Tool {} cancelled by plugin", name));
+                }
+                Ok((false, new_args)) => args = new_args,
+                Err(err) => tracing::warn!("before_tool plugin hook failed for {}: {}", name, err),
+            }
+        }
 
         let decision = self.approval_policy.evaluate_tool(name, &args);
         if !decision.allowed {
@@ -121,7 +160,7 @@ impl ToolOrchestrator {
         } else {
             Err(anyhow::anyhow!("Tool not found: {}", name))
         };
-        ToolResult {
+        let tool_result = ToolResult {
             tool_name: name.into(),
             success: result.is_ok(),
             output: result
@@ -131,7 +170,13 @@ impl ToolOrchestrator {
                 .unwrap_or(serde_json::Value::Null),
             error: result.as_ref().err().map(|e| e.to_string()),
             duration_ms: start.elapsed().as_millis() as u64,
+        };
+
+        if let Some(plugins) = &self.plugins {
+            plugins.run_after_tool(name, tool_result.clone()).await;
         }
+
+        tool_result
     }
 }
 
