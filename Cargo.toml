@@ -63,6 +63,7 @@ base64 = "0.22"
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
+tokio-cron-scheduler = "0.10"
 
 # Parallel processing
 rayon = "1"

@@ -13,6 +13,7 @@ mod memory;
 mod orchestrator;
 mod persona;
 mod providers;
+mod scheduler;
 mod skills;
 mod streaming;
 mod tools;
@@ -151,6 +152,9 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
 
     // Load persisted sessions
     agent.load_sessions().await?;
+
+    let _cron_scheduler =
+        scheduler::CronScheduler::start(agent.clone(), config.scheduler.clone()).await?;
 
     info!("⚡ Core initialized in {:?}", start.elapsed());
 

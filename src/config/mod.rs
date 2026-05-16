@@ -19,6 +19,7 @@ pub struct AppConfig {
     pub channels: ChannelsConfig,
     pub tools: ToolsConfig,
     pub mcp: McpConfig,
+    pub scheduler: SchedulerConfig,
     pub server: ServerConfig,
 }
 
@@ -305,6 +306,39 @@ impl Default for McpServerConfig {
             include_tools: Vec::new(),
             exclude_tools: Vec::new(),
             timeout_secs: 30,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
+pub struct SchedulerConfig {
+    pub enabled: bool,
+    pub jobs: Vec<ScheduleJobConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ScheduleJobConfig {
+    pub name: String,
+    pub cron: String,
+    pub prompt: String,
+    pub session_id: Option<String>,
+    pub enabled: bool,
+    pub run_on_startup: bool,
+    pub timeout_secs: u64,
+}
+
+impl Default for ScheduleJobConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            cron: String::new(),
+            prompt: String::new(),
+            session_id: None,
+            enabled: true,
+            run_on_startup: false,
+            timeout_secs: 300,
         }
     }
 }

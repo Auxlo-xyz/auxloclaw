@@ -197,6 +197,26 @@ port = 18789
 | `AUXLOCLAW_REQUIRE_AUTH` | Require bearer auth on API routes |
 | `AUXLOCLAW_API_KEY` | API key for bearer auth |
 
+### Cron Scheduler
+
+AUXLOCLAW can run autonomous recurring jobs inside the gateway process.
+
+```toml
+[scheduler]
+enabled = true
+
+[[scheduler.jobs]]
+name = "daily-summary"
+cron = "0 0 9 * * *"
+prompt = "Review active sessions and produce a daily summary."
+session_id = "scheduler:daily-summary"
+enabled = true
+run_on_startup = false
+timeout_secs = 300
+```
+
+Cron expressions use the six-field seconds format: `sec min hour day month weekday`. Scheduled prompts execute through `AgentCore::process`, so they share memory, tools, MCP tools, and approval policy with normal gateway requests.
+
 ### MCP Client
 
 AUXLOCLAW can connect to stdio MCP servers and expose their tools as local tools. MCP tools are registered as `mcp_<server_or_prefix>_<tool>` and pass through the same approval policy as built-in tools.
