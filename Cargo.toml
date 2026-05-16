@@ -31,7 +31,7 @@ serde_yaml = "0.9"
 toml = "0.8"
 
 # Database & Memory
-rusqlite = "0.28"
+rusqlite = { version = "0.28", features = ["bundled"] }
 
 # CLI & Config
 clap = { version = "4", features = ["derive", "env"] }

@@ -79,8 +79,69 @@ pub enum Commands {
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
     },
+    /// Create a structured task plan from a goal
+    Plan {
+        /// Goal to turn into a plan skeleton
+        goal: String,
+        /// Output plan JSON path
+        #[arg(short, long, default_value = "auxloclaw-plan.json")]
+        output: PathBuf,
+    },
+    /// Execute a structured task plan DAG
+    RunPlan {
+        /// Plan JSON/YAML path
+        path: PathBuf,
+        /// Run database path
+        #[arg(long)]
+        db: Option<PathBuf>,
+    },
+    /// Inspect persistent run history
+    Runs {
+        #[command(subcommand)]
+        action: RunsCommands,
+        /// Run database path
+        #[arg(long)]
+        db: Option<PathBuf>,
+    },
+    /// Show runtime capability manifest
+    Capabilities {
+        /// Output machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Stop the gateway server
     Stop,
+}
+
+#[derive(Subcommand)]
+pub enum RunsCommands {
+    /// List recent runs
+    List {
+        /// Maximum number of runs to list
+        #[arg(short, long, default_value_t = 20)]
+        limit: usize,
+    },
+
+    /// Show one run with steps and events
+    Show {
+        /// Run id
+        id: String,
+    },
+
+    /// Export a run as JSON
+    Export {
+        /// Run id
+        id: String,
+        /// Output file; prints to stdout if omitted
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Replay metadata for a run
+    Replay {
+        /// Run id
+        id: String,
+    },
 }
 
 #[derive(Subcommand)]

@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
+use crate::capabilities::CapabilityManifest;
 use crate::checkpoints::CheckpointManager;
 use crate::config::AppConfig;
 use crate::memory::{
@@ -394,14 +395,21 @@ impl AgentCore {
         }
     }
 
+    pub fn capability_manifest(&self) -> CapabilityManifest {
+        CapabilityManifest::new(&self.config, Some(&self.orchestrator))
+    }
+
     fn build_system_prompt(&self) -> String {
         use crate::persona::SystemPromptBuilder;
 
         let tools = self.orchestrator.get_definitions();
-        SystemPromptBuilder::new(self.persona.clone())
+        let capability_summary = self.capability_manifest().prompt_summary();
+        let base_prompt = SystemPromptBuilder::new(self.persona.clone())
             .with_tools(&tools)
             .with_skills(&[])
-            .build()
+            .build();
+
+        format!("{}\n\n{}", base_prompt, capability_summary)
     }
 
     pub async fn memory_summary(&self) -> String {

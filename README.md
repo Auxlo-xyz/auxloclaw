@@ -197,6 +197,56 @@ port = 18789
 | `AUXLOCLAW_REQUIRE_AUTH` | Require bearer auth on API routes |
 | `AUXLOCLAW_API_KEY` | API key for bearer auth |
 
+### Capability Registry and Self-Awareness
+
+AUXLOCLAW now has a runtime capability registry that the agent injects into its own system prompt so it knows what it can do during normal chat sessions.
+
+```bash
+auxloclaw capabilities
+auxloclaw capabilities --json
+curl http://localhost:18789/api/capabilities
+```
+
+The manifest includes built-in features, registered tools, MCP status, skills/taps, scheduler, plugin hooks, checkpoints, planner DAG, and run database state.
+
+### Planner DAG and Run Database
+
+AUXLOCLAW includes a structured task planner, DAG executor, and SQLite run database for auditable autonomous execution.
+
+```bash
+# Create an editable plan skeleton
+auxloclaw plan "Fix failing auth tests" --output auth-plan.json
+
+# Execute JSON/YAML plan and record run state
+auxloclaw run-plan auth-plan.json
+
+# Inspect persisted runs
+auxloclaw runs list
+auxloclaw runs show <run-id>
+auxloclaw runs export <run-id> --output run.json
+```
+
+Plan schema:
+
+```json
+{
+  "goal": "Fix failing auth tests",
+  "strategy": "inspect, patch, verify",
+  "steps": [
+    {
+      "id": "verify",
+      "description": "Run tests",
+      "tool": "execute_code",
+      "args": { "language": "shell", "code": "cargo test --all" },
+      "depends_on": [],
+      "retries": 1
+    }
+  ]
+}
+```
+
+Run history is stored at `~/.auxloclaw/runs.db` by default and records runs, events, plan steps, results, errors, timestamps, and metadata.
+
 ### Skills Hub / Taps
 
 AUXLOCLAW can merge skills from multiple registry manifests, called taps. The official Auxlo registry is enabled by default and custom taps live in `~/.config/auxloclaw/skill-taps.json`.

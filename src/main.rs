@@ -2,6 +2,7 @@
 
 mod agent;
 mod auth;
+mod capabilities;
 mod channels;
 mod checkpoints;
 mod cli;
@@ -13,8 +14,10 @@ mod mcp;
 mod memory;
 mod orchestrator;
 mod persona;
+mod planner;
 mod plugins;
 mod providers;
+mod runs;
 mod scheduler;
 mod skills;
 mod streaming;
@@ -95,6 +98,22 @@ async fn main() -> anyhow::Result<()> {
             args: run_args,
         } => {
             commands::run::handle_run(skill, run_args).await?;
+        }
+
+        Commands::Plan { goal, output } => {
+            commands::plan::handle_plan(goal, output).await?;
+        }
+
+        Commands::RunPlan { path, db } => {
+            commands::plan::handle_run_plan(path, db).await?;
+        }
+
+        Commands::Runs { action, db } => {
+            commands::runs::handle_runs(action, db).await?;
+        }
+
+        Commands::Capabilities { json } => {
+            commands::capabilities::handle_capabilities(json).await?;
         }
 
         Commands::Stop => {
@@ -256,6 +275,10 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
         .route("/chat", axum::routing::post(chat_handler))
         .route("/api/chat", axum::routing::post(chat_handler))
         .route("/api/status", axum::routing::get(status_handler))
+        .route(
+            "/api/capabilities",
+            axum::routing::get(capabilities_handler),
+        )
         .route("/api/skills", axum::routing::get(list_skills_handler))
         .route("/api/reflect", axum::routing::post(reflect_handler))
         .route(
@@ -311,6 +334,10 @@ async fn status_handler() -> axum::Json<serde_json::Value> {
         "version": "0.1.0",
         "uptime": "running"
     }))
+}
+
+async fn capabilities_handler(State(state): State<AppState>) -> axum::Json<serde_json::Value> {
+    axum::Json(state.agent.capability_manifest().as_json())
 }
 
 async fn list_skills_handler() -> axum::Json<Vec<String>> {
