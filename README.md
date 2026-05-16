@@ -197,6 +197,40 @@ port = 18789
 | `AUXLOCLAW_REQUIRE_AUTH` | Require bearer auth on API routes |
 | `AUXLOCLAW_API_KEY` | API key for bearer auth |
 
+### MCP Client
+
+AUXLOCLAW can connect to stdio MCP servers and expose their tools as local tools. MCP tools are registered as `mcp_<server_or_prefix>_<tool>` and pass through the same approval policy as built-in tools.
+
+```toml
+[mcp]
+enabled = true
+
+[[mcp.servers]]
+name = "filesystem"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/home/workspace"]
+tool_prefix = "fs"
+timeout_secs = 30
+include_tools = []
+exclude_tools = []
+
+[mcp.servers.env]
+# Optional env vars for the server
+```
+
+Server fields:
+
+| Field | Description |
+|-------|-------------|
+| `name` | Unique server name |
+| `command` | Stdio MCP server command |
+| `args` | Command arguments |
+| `env` | Optional environment variables |
+| `tool_prefix` | Optional local tool prefix override |
+| `include_tools` | Optional allowlist of remote tool names |
+| `exclude_tools` | Optional denylist of remote tool names |
+| `timeout_secs` | Per-request timeout |
+
 ---
 
 ## Tool Approval Policy

@@ -1,10 +1,10 @@
 //! Configuration management for AUXLOCLAW
 
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
 use std::fs;
-use anyhow::{Context, Result};
+use std::path::Path;
 
 use crate::persona::PersonaConfig;
 
@@ -18,6 +18,7 @@ pub struct AppConfig {
     pub memory: MemoryConfig,
     pub channels: ChannelsConfig,
     pub tools: ToolsConfig,
+    pub mcp: McpConfig,
     pub server: ServerConfig,
 }
 
@@ -58,9 +59,15 @@ pub struct ProvidersConfig {
     pub request_timeout_secs: u64,
 }
 
-fn default_provider_name() -> String { "nvidia".into() }
-fn default_pool_size() -> usize { 32 }
-fn default_timeout() -> u64 { 60 }
+fn default_provider_name() -> String {
+    "nvidia".into()
+}
+fn default_pool_size() -> usize {
+    32
+}
+fn default_timeout() -> u64 {
+    60
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProviderEntry {
@@ -87,7 +94,6 @@ impl Default for ProvidersConfig {
     }
 }
 
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SubAgentsConfig {
     /// Enable sub-agent delegation
@@ -113,10 +119,18 @@ pub struct SubAgentsConfig {
     pub track_cost: bool,
 }
 
-fn default_min_complexity() -> u32 { 50 }
-fn default_max_budget() -> u32 { 30000 }
-fn default_max_concurrent() -> u32 { 5 }
-fn default_subagent_timeout() -> u64 { 60 }
+fn default_min_complexity() -> u32 {
+    50
+}
+fn default_max_budget() -> u32 {
+    30000
+}
+fn default_max_concurrent() -> u32 {
+    5
+}
+fn default_subagent_timeout() -> u64 {
+    60
+}
 
 impl Default for SubAgentsConfig {
     fn default() -> Self {
@@ -132,9 +146,15 @@ impl Default for SubAgentsConfig {
     }
 }
 
-fn default_cache_size() -> usize { 1000 }
-fn default_db_path() -> String { "~/.auxloclaw/memory.db".into() }
-fn default_consolidation() -> u64 { 300 }
+fn default_cache_size() -> usize {
+    1000
+}
+fn default_db_path() -> String {
+    "~/.auxloclaw/memory.db".into()
+}
+fn default_consolidation() -> u64 {
+    300
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MemoryConfig {
@@ -166,12 +186,24 @@ pub struct MemoryConfig {
     pub reflection_interval_secs: u64,
 }
 
-fn default_compaction_threshold() -> usize { 40 }
-fn default_compaction_keep_recent() -> usize { 10 }
-fn default_compaction_cooldown() -> u64 { 300 }
-fn default_reflection_min_messages() -> usize { 5 }
-fn default_reflection_cooldown() -> u64 { 300 }
-fn default_reflection_interval() -> u64 { 300 } // 5 minutes of inactivity
+fn default_compaction_threshold() -> usize {
+    40
+}
+fn default_compaction_keep_recent() -> usize {
+    10
+}
+fn default_compaction_cooldown() -> u64 {
+    300
+}
+fn default_reflection_min_messages() -> usize {
+    5
+}
+fn default_reflection_cooldown() -> u64 {
+    300
+}
+fn default_reflection_interval() -> u64 {
+    300
+} // 5 minutes of inactivity
 
 impl Default for MemoryConfig {
     fn default() -> Self {
@@ -237,7 +269,44 @@ pub enum GroupPolicy {
 }
 
 impl Default for GroupPolicy {
-    fn default() -> Self { Self::Mention }
+    fn default() -> Self {
+        Self::Mention
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
+pub struct McpConfig {
+    pub enabled: bool,
+    pub servers: Vec<McpServerConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct McpServerConfig {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: HashMap<String, String>,
+    pub tool_prefix: Option<String>,
+    pub include_tools: Vec<String>,
+    pub exclude_tools: Vec<String>,
+    pub timeout_secs: u64,
+}
+
+impl Default for McpServerConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            command: String::new(),
+            args: Vec::new(),
+            env: HashMap::new(),
+            tool_prefix: None,
+            include_tools: Vec::new(),
+            exclude_tools: Vec::new(),
+            timeout_secs: 30,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -256,9 +325,15 @@ pub struct ToolsConfig {
     pub web_search_api_key: Option<String>,
 }
 
-fn default_true() -> bool { true }
-fn default_exec_timeout() -> u64 { 60 }
-fn default_brave() -> String { "brave".into() }
+fn default_true() -> bool {
+    true
+}
+fn default_exec_timeout() -> u64 {
+    60
+}
+fn default_brave() -> String {
+    "brave".into()
+}
 
 impl Default for ToolsConfig {
     fn default() -> Self {
@@ -283,8 +358,12 @@ pub struct ServerConfig {
     pub cors_enabled: bool,
 }
 
-fn default_host() -> String { "0.0.0.0".into() }
-fn default_port() -> u16 { 18789 }
+fn default_host() -> String {
+    "0.0.0.0".into()
+}
+fn default_port() -> u16 {
+    18789
+}
 
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -302,8 +381,8 @@ impl AppConfig {
         if Path::new(path).exists() {
             let content = fs::read_to_string(path)
                 .with_context(|| format!("Failed to read config file: {}", path))?;
-            let config: AppConfig = toml::from_str(&content)
-                .with_context(|| "Failed to parse config file")?;
+            let config: AppConfig =
+                toml::from_str(&content).with_context(|| "Failed to parse config file")?;
             return Ok(config.with_env_overrides());
         }
 
@@ -332,7 +411,8 @@ impl AppConfig {
                     "google" | "google_ai_studio" | "gemini" => {
                         if let Ok(key) = std::env::var("GOOGLE_AI_STUDIO_KEY") {
                             provider.api_key = key;
-                            provider.api_base = "https://generativelanguage.googleapis.com/v1beta/openai".into();
+                            provider.api_base =
+                                "https://generativelanguage.googleapis.com/v1beta/openai".into();
                         }
                     }
                     "anthropic" => {

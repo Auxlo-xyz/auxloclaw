@@ -8,6 +8,7 @@ mod commands;
 mod config;
 mod coordination;
 mod error_recovery;
+mod mcp;
 mod memory;
 mod orchestrator;
 mod persona;
@@ -132,6 +133,10 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     let memory = Arc::new(memory::MemoryEngine::new(&config.memory)?);
     let providers = Arc::new(providers::ProviderPool::new(config.providers.clone()));
     let orchestrator = Arc::new(orchestrator::ToolOrchestrator::new());
+    if config.mcp.enabled {
+        let count = orchestrator.register_mcp_tools(&config.mcp).await?;
+        info!("🔌 Registered {} MCP tools", count);
+    }
 
     // Initialize persistent session store
     let session_store = Arc::new(memory::SessionStore::new(&session_db)?);

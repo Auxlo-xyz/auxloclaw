@@ -67,6 +67,19 @@ impl ToolOrchestrator {
         self.register(Arc::new(XFetchTool));
     }
 
+    pub async fn register_mcp_tools(
+        &self,
+        config: &crate::config::McpConfig,
+    ) -> anyhow::Result<usize> {
+        let registry = crate::mcp::McpRegistry::new();
+        let tools = registry.load_tools(config).await?;
+        let count = tools.len();
+        for tool in tools {
+            self.register(tool);
+        }
+        Ok(count)
+    }
+
     pub fn register(&self, tool: Arc<dyn Tool>) {
         self.registry.insert(tool.name().to_string(), tool);
     }
