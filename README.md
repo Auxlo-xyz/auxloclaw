@@ -197,6 +197,10 @@ port = 18789
 | `AUXLOCLAW_REQUIRE_AUTH` | Require bearer auth on API routes |
 | `AUXLOCLAW_API_KEY` | API key for bearer auth |
 
+### Reflection Loop Guard
+
+AUXLOCLAW prevents duplicate auto-reflection loops by checking cooldown, skipping sessions with no new messages since the latest reflection, deduplicating identical reflections, and bounding reflection prompt input to the same recent-history policy used for chat requests. Default reflection input is capped to the latest 10 turns and 20k prompt characters.
+
 ### Exact Rejected Request Captures
 
 For deep debugging, AUXLOCLAW can write exact rejected provider payloads to local JSON files instead of only logging the provider error.

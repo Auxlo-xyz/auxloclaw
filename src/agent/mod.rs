@@ -75,6 +75,8 @@ impl AgentCore {
             enabled: config.memory.reflection_enabled,
             min_messages: config.memory.reflection_min_messages,
             cooldown_secs: config.memory.reflection_cooldown_secs,
+            max_messages: config.agent.recent_history_turns * 2,
+            max_prompt_chars: (config.agent.context_window_tokens as usize).min(20_000),
         };
         let reflector = Arc::new(Reflector::new(reflector_config, data_dir));
 
@@ -505,13 +507,16 @@ impl AgentCore {
         let sessions = self.sessions.read().await;
         if let Some(session) = sessions.get(session_key) {
             match self.reflector.reflect(session).await {
-                Ok(reflection) => {
+                Ok(Some(reflection)) => {
                     tracing::info!(
                         "Reflection complete: {} - {}",
                         reflection.reflection_type.to_string().to_lowercase(),
                         reflection.title
                     );
                     return Some(reflection);
+                }
+                Ok(None) => {
+                    tracing::debug!("Reflection skipped for session {}", session_key);
                 }
                 Err(e) => {
                     tracing::error!("Reflection error: {}", e);
@@ -553,10 +558,23 @@ impl AgentCore {
             let last = last_activity.get(key).copied().unwrap_or(0);
             let inactive_secs = now.saturating_sub(last);
 
-            // Check: inactive long enough AND has enough messages
-            if inactive_secs >= interval_secs && session.messages.len() >= min_messages {
-                result.push(key.clone());
+            if inactive_secs < interval_secs || session.messages.len() < min_messages {
+                continue;
             }
+
+            if !self.reflector.should_reflect(key, session.messages.len()) {
+                continue;
+            }
+
+            if let Ok(reflections) = self.reflector.load_reflections(key) {
+                if let Some(latest) = reflections.first() {
+                    if latest.message_count >= session.messages.len() {
+                        continue;
+                    }
+                }
+            }
+
+            result.push(key.clone());
         }
 
         result
