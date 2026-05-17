@@ -1,25 +1,29 @@
 //! Provider pool with multi-provider support
 //! Users can choose which provider/model to use at any time
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
+use std::io::Write;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, RwLock};
 use tokio::time;
 
 use crate::config::{ProviderEntry, ProvidersConfig};
+use sha2::{Digest, Sha256};
 
 /// LLM Provider trait - unified interface for all providers
 #[async_trait]
 pub trait LLMProvider: Send + Sync {
     fn name(&self) -> &str;
-    fn provider_type(&self) -> &str;  // e.g., "nvidia", "google", "openai"
-    
+    fn provider_type(&self) -> &str; // e.g., "nvidia", "google", "openai"
+
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse>;
     async fn stream(&self, request: CompletionRequest) -> Result<mpsc::Receiver<StreamChunk>>;
     async fn embed(&self, text: &str) -> Result<Vec<f32>>;
@@ -38,10 +42,10 @@ impl ProviderPool {
             .timeout(Duration::from_secs(config.request_timeout_secs))
             .build()
             .unwrap_or_else(|_| Client::new());
-        
+
         let mut providers = HashMap::new();
         let default = config.active.clone();
-        
+
         // Register all providers from config
         for entry in &config.providers {
             let p = OpenAICompatibleProvider::new(
@@ -54,14 +58,14 @@ impl ProviderPool {
             let p: Arc<dyn LLMProvider> = Arc::new(p);
             providers.insert(entry.name.clone(), p);
         }
-        
+
         Self {
             providers: RwLock::new(providers),
             active_provider: RwLock::new(default),
             client,
         }
     }
-    
+
     /// Create a new provider from config (for dynamic adding)
     pub async fn add_provider(&self, entry: ProviderEntry) -> Result<()> {
         let provider = Arc::new(OpenAICompatibleProvider::new(
@@ -71,39 +75,49 @@ impl ProviderPool {
             self.client.clone(),
             entry.extra_headers.clone(),
         ));
-        
-        self.providers.write().await.insert(entry.name.clone(), provider);
+
+        self.providers
+            .write()
+            .await
+            .insert(entry.name.clone(), provider);
         tracing::info!("Added provider: {}", entry.name);
         Ok(())
     }
-    
+
     /// Set active provider by name
     pub async fn set_active(&self, name: &str) -> Result<()> {
         if !self.providers.read().await.contains_key(name) {
             let available = self.list_providers().await;
-            return Err(anyhow!("Provider '{}' not found. Available: {:?}", name, available));
+            return Err(anyhow!(
+                "Provider '{}' not found. Available: {:?}",
+                name,
+                available
+            ));
         }
         *self.active_provider.write().await = name.to_string();
         tracing::info!("Switched to provider: {}", name);
         Ok(())
     }
-    
+
     /// Get current active provider
     pub async fn get_active(&self) -> Option<Arc<dyn LLMProvider>> {
         let active = self.active_provider.read().await;
         self.providers.read().await.get(&*active).cloned()
     }
-    
+
     /// List all available providers
     pub async fn list_providers(&self) -> Vec<ProviderInfo> {
-        self.providers.read().await.iter().map(|(name, p)| {
-            ProviderInfo {
+        self.providers
+            .read()
+            .await
+            .iter()
+            .map(|(name, p)| ProviderInfo {
                 name: name.clone(),
                 provider_type: p.provider_type().to_string(),
-            }
-        }).collect()
+            })
+            .collect()
     }
-    
+
     /// Get default provider name
     pub async fn default_name(&self) -> String {
         self.active_provider.read().await.clone()
@@ -113,32 +127,45 @@ impl ProviderPool {
     pub async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
         const MAX_RETRIES: u32 = 3;
         const BASE_DELAY_MS: u64 = 1000;
-        
-        let provider = self.get_active().await
+
+        let provider = self
+            .get_active()
+            .await
             .ok_or_else(|| anyhow!("No active provider"))?;
-        
+
         for attempt in 0..MAX_RETRIES {
             match provider.complete(request.clone()).await {
                 Ok(response) => return Ok(response),
                 Err(e) => {
                     if attempt < MAX_RETRIES - 1 {
                         let delay_ms = BASE_DELAY_MS * 2u64.pow(attempt);
-                        tracing::warn!("Provider {} failed (attempt {}), retrying in {}ms: {}", 
-                            provider.name(), attempt + 1, delay_ms, e);
+                        tracing::warn!(
+                            "Provider {} failed (attempt {}), retrying in {}ms: {}",
+                            provider.name(),
+                            attempt + 1,
+                            delay_ms,
+                            e
+                        );
                         time::sleep(Duration::from_millis(delay_ms)).await;
                     } else {
-                        tracing::error!("Provider {} failed after {} attempts: {}", 
-                            provider.name(), MAX_RETRIES, e);
+                        tracing::error!(
+                            "Provider {} failed after {} attempts: {}",
+                            provider.name(),
+                            MAX_RETRIES,
+                            e
+                        );
                     }
                 }
             }
         }
-        
+
         Err(anyhow!("Provider {} failed", provider.name()))
     }
 
     pub async fn stream(&self, request: CompletionRequest) -> Result<mpsc::Receiver<StreamChunk>> {
-        let provider = self.get_active().await
+        let provider = self
+            .get_active()
+            .await
             .ok_or_else(|| anyhow!("No active provider"))?;
         provider.stream(request).await
     }
@@ -185,7 +212,7 @@ impl OpenAICompatibleProvider {
         } else {
             "openai-compatible"
         };
-        
+
         Self {
             name,
             provider_type: provider_type.to_string(),
@@ -209,7 +236,7 @@ impl OpenAICompatibleProvider {
         for (key, value) in &self.extra_headers {
             if let (Ok(name), Ok(val)) = (
                 key.parse::<reqwest::header::HeaderName>(),
-                value.parse::<reqwest::header::HeaderValue>()
+                value.parse::<reqwest::header::HeaderValue>(),
             ) {
                 headers.insert(name, val);
             }
@@ -223,7 +250,7 @@ impl LLMProvider for OpenAICompatibleProvider {
     fn name(&self) -> &str {
         &self.name
     }
-    
+
     fn provider_type(&self) -> &str {
         &self.provider_type
     }
@@ -231,36 +258,48 @@ impl LLMProvider for OpenAICompatibleProvider {
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
         // Strip provider prefix only for Google (they don't accept it)
         let model_name = if self.provider_type == "google" {
-            request.model.split('/').last().unwrap_or(&request.model).to_string()
+            request
+                .model
+                .split('/')
+                .last()
+                .unwrap_or(&request.model)
+                .to_string()
         } else {
             request.model.clone()
         };
-        
+
         let mut url = format!("{}/chat/completions", self.api_base);
-        
+
         // Google AI Studio requires key as query param
         if self.provider_type == "google" && !self.api_key.is_empty() {
             url = format!("{}?key={}", url, self.api_key);
         }
-        
+
         let headers = if self.provider_type == "google" {
             let mut h = reqwest::header::HeaderMap::new();
-            h.insert(reqwest::header::CONTENT_TYPE, "application/json".parse().unwrap());
+            h.insert(
+                reqwest::header::CONTENT_TYPE,
+                "application/json".parse().unwrap(),
+            );
             if !self.api_key.is_empty() {
-                h.insert(reqwest::header::AUTHORIZATION, format!("Bearer {}", self.api_key).parse().unwrap());
+                h.insert(
+                    reqwest::header::AUTHORIZATION,
+                    format!("Bearer {}", self.api_key).parse().unwrap(),
+                );
             }
             h
         } else {
             self.build_headers()
         };
-        
+
         tracing::debug!("Provider {} making request to: {}", self.name, url);
-        
+
         let mut req = request.clone();
         req.model = model_name.to_string();
         let body = serde_json::to_value(&req)?;
-        
-        let response = self.client
+
+        let response = self
+            .client
             .post(&url)
             .headers(headers)
             .json(&body)
@@ -269,33 +308,58 @@ impl LLMProvider for OpenAICompatibleProvider {
 
         let status = response.status();
         tracing::debug!("Provider {} response status: {}", self.name, status);
-        
+
         if !status.is_success() {
             let error = response.text().await?;
-            tracing::error!("Provider {} API error: {}", self.name, error);
+            if capture_provider_rejections_enabled() {
+                match capture_rejected_request(&self.name, status.as_u16(), &error, &body) {
+                    Ok(path) => tracing::error!(
+                        "Provider {} API error: {}; exact rejected request captured at {}",
+                        self.name,
+                        error,
+                        path.display()
+                    ),
+                    Err(capture_error) => tracing::error!(
+                        "Provider {} API error: {}; failed to capture rejected request: {}",
+                        self.name,
+                        error,
+                        capture_error
+                    ),
+                }
+            } else {
+                tracing::error!("Provider {} API error: {}", self.name, error);
+            }
             return Err(anyhow!("API error: {}", error));
         }
 
         let completion: OpenAICompletion = response.json().await?;
-        
+
         // Check for Google error in response
         if let Some(err) = completion.error {
-            let err_msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("Unknown error");
+            let err_msg = err
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Unknown error");
             return Err(anyhow!("API error: {}", err_msg));
         }
-        
-        let content = completion.choices
+
+        let content = completion
+            .choices
             .first()
             .map(|c| {
-                c.message.content.clone()
-                    .or(c.message.reasoning_content.clone()).or(c.message.reasoning.clone())
+                c.message
+                    .content
+                    .clone()
+                    .or(c.message.reasoning_content.clone())
+                    .or(c.message.reasoning.clone())
                     .unwrap_or_default()
             })
             .unwrap_or_default();
-        
+
         Ok(CompletionResponse {
             content,
-            tool_calls: completion.choices
+            tool_calls: completion
+                .choices
                 .first()
                 .and_then(|c| c.message.tool_calls.clone()),
             usage: completion.usage.map(|u| Usage {
@@ -308,16 +372,16 @@ impl LLMProvider for OpenAICompatibleProvider {
 
     async fn stream(&self, request: CompletionRequest) -> Result<mpsc::Receiver<StreamChunk>> {
         let (tx, rx) = mpsc::channel(100);
-        
+
         let url = format!("{}/chat/completions", self.api_base);
         let mut stream_request = request;
         stream_request.stream = Some(true);
-        
+
         let body = serde_json::to_value(&stream_request)?;
         let headers = self.build_headers();
         let client = self.client.clone();
         let provider_name = self.name.clone();
-        
+
         tokio::spawn(async move {
             match client.post(&url).headers(headers).json(&body).send().await {
                 Ok(response) => {
@@ -331,10 +395,18 @@ impl LLMProvider for OpenAICompatibleProvider {
                                     if line.starts_with("data: ") {
                                         let data = &line[6..];
                                         if data == "[DONE]" {
-                                            let _ = tx.send(StreamChunk { id: None, choices: vec![], done: true }).await;
+                                            let _ = tx
+                                                .send(StreamChunk {
+                                                    id: None,
+                                                    choices: vec![],
+                                                    done: true,
+                                                })
+                                                .await;
                                             break;
                                         }
-                                        if let Ok(parsed) = serde_json::from_str::<StreamChunk>(data) {
+                                        if let Ok(parsed) =
+                                            serde_json::from_str::<StreamChunk>(data)
+                                        {
                                             let _ = tx.send(parsed).await;
                                         }
                                     }
@@ -355,6 +427,76 @@ impl LLMProvider for OpenAICompatibleProvider {
     async fn embed(&self, _text: &str) -> Result<Vec<f32>> {
         Err(anyhow!("Embedding not implemented"))
     }
+}
+
+fn capture_provider_rejections_enabled() -> bool {
+    matches!(
+        std::env::var("AUXLOCLAW_CAPTURE_REJECTED_REQUESTS")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn rejected_request_dir() -> PathBuf {
+    std::env::var("AUXLOCLAW_REJECTED_REQUEST_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".auxloclaw/debug/rejected-requests")
+        })
+}
+
+fn capture_rejected_request(
+    provider: &str,
+    status: u16,
+    error: &str,
+    body: &serde_json::Value,
+) -> Result<PathBuf> {
+    let dir = rejected_request_dir();
+    fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+
+    let body_bytes = serde_json::to_vec(body)?;
+    let mut hasher = Sha256::new();
+    hasher.update(&body_bytes);
+    let hash = format!("{:x}", hasher.finalize());
+    let hash_short = &hash[..16];
+    let unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let safe_provider: String = provider
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let path = dir.join(format!("{}-{}-{}.json", unix_ms, safe_provider, hash_short));
+
+    let capture = serde_json::json!({
+        "captured_at_unix_ms": unix_ms,
+        "provider": provider,
+        "status": status,
+        "error": error,
+        "request_sha256": hash,
+        "request_bytes": body_bytes.len(),
+        "request": body,
+    });
+
+    let mut file =
+        fs::File::create(&path).with_context(|| format!("creating {}", path.display()))?;
+    file.write_all(serde_json::to_string_pretty(&capture)?.as_bytes())?;
+    file.write_all(
+        b"
+",
+    )?;
+    Ok(path)
 }
 
 // ========== Request/Response Types ==========

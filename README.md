@@ -197,6 +197,18 @@ port = 18789
 | `AUXLOCLAW_REQUIRE_AUTH` | Require bearer auth on API routes |
 | `AUXLOCLAW_API_KEY` | API key for bearer auth |
 
+### Exact Rejected Request Captures
+
+For deep debugging, AUXLOCLAW can write exact rejected provider payloads to local JSON files instead of only logging the provider error.
+
+```bash
+AUXLOCLAW_CAPTURE_REJECTED_REQUESTS=true \
+AUXLOCLAW_REJECTED_REQUEST_DIR=/root/.auxloclaw/debug/rejected-requests \
+auxloclaw gateway
+```
+
+When a provider returns a non-success status, AUXLOCLAW writes a file containing provider, HTTP status, provider error text, SHA-256 hash, request byte size, and the exact serialized `request` body that was rejected. The normal log prints the capture file path. These files may contain private chat/tool content, so keep the directory local and delete captures after debugging.
+
 ### Context Pruning
 
 AUXLOCLAW now limits provider request context to recent conversation turns while keeping older history persisted on disk.
