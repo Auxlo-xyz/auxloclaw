@@ -10,7 +10,7 @@ use tokio::sync::RwLock;
 use crate::capabilities::CapabilityManifest;
 use crate::checkpoints::CheckpointManager;
 use crate::config::AppConfig;
-use crate::context::build_pruned_messages;
+use crate::context::{build_pruned_messages, truncate_for_summary};
 use crate::memory::{
     CompactionResult, Compactor, HistoryMessage, MemoryEngine, Reflection, Reflector,
     ReflectorConfig, SessionHistory, SessionStore,
@@ -122,44 +122,30 @@ impl AgentCore {
             )
             .await;
 
-        // Get history
+        // Build provider request context with bounded history and reflections.
         let history = self.get_history(&session_key).await;
-
-        // Get reflections
         let reflections = self.get_reflections(&session_key).unwrap_or_else(Vec::new);
 
-        // Build initial messages
-        let mut messages = vec![Message {
-            role: "system".into(),
-            content: self.build_system_prompt(),
-            tool_calls: None,
-        }];
-
-        // Add reflections as system messages
-        for reflection in reflections {
-            messages.push(Message {
-                role: "system".into(),
-                content: serde_json::to_string(&reflection)
-                    .unwrap_or_else(|_| reflection.title.clone()),
-                tool_calls: None,
-            });
+        let mut system_prompt = self.build_system_prompt();
+        if !reflections.is_empty() {
+            system_prompt.push_str("\n\n## Recent Reflections\nOnly the newest bounded reflections are included to avoid context bloat.\n");
+            for reflection in reflections.iter().take(3) {
+                let serialized =
+                    serde_json::to_string(reflection).unwrap_or_else(|_| reflection.title.clone());
+                system_prompt.push_str("- ");
+                system_prompt
+                    .push_str(&truncate_for_summary(&serialized, 1_000).replace('\n', " "));
+                system_prompt.push('\n');
+            }
         }
 
-        // Add history
-        for m in history {
-            messages.push(Message {
-                role: m.role,
-                content: m.content,
-                tool_calls: None,
-            });
-        }
-
-        // Add user message
-        messages.push(Message {
-            role: "user".into(),
-            content: effective_message.clone(),
-            tool_calls: None,
-        });
+        let mut messages = build_pruned_messages(
+            system_prompt,
+            &history,
+            effective_message.clone(),
+            self.config.agent.recent_history_turns,
+            self.config.agent.context_window_tokens,
+        );
 
         // Tool execution loop
         let mut iterations = 0;
