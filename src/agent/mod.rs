@@ -10,6 +10,7 @@ use tokio::sync::RwLock;
 use crate::capabilities::CapabilityManifest;
 use crate::checkpoints::CheckpointManager;
 use crate::config::AppConfig;
+use crate::context::build_pruned_messages;
 use crate::memory::{
     CompactionResult, Compactor, HistoryMessage, MemoryEngine, Reflection, Reflector,
     ReflectorConfig, SessionHistory, SessionStore,

@@ -8,6 +8,7 @@ mod checkpoints;
 mod cli;
 mod commands;
 mod config;
+mod context;
 mod coordination;
 mod error_recovery;
 mod mcp;

@@ -32,6 +32,10 @@ pub struct AgentConfig {
     pub temperature: f32,
     pub max_tool_iterations: u32,
     pub context_window_tokens: u32,
+    #[serde(default = "default_recent_history_turns")]
+    pub recent_history_turns: usize,
+    #[serde(default = "default_tool_output_max_chars")]
+    pub tool_output_max_chars: usize,
     pub timezone: String,
 }
 
@@ -44,6 +48,8 @@ impl Default for AgentConfig {
             temperature: 1.0,
             max_tool_iterations: 50,
             context_window_tokens: 20000,
+            recent_history_turns: 10,
+            tool_output_max_chars: 4_000,
             timezone: "UTC".into(),
         }
     }
@@ -69,6 +75,12 @@ fn default_pool_size() -> usize {
 }
 fn default_timeout() -> u64 {
     60
+}
+fn default_recent_history_turns() -> usize {
+    10
+}
+fn default_tool_output_max_chars() -> usize {
+    4_000
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -197,6 +197,27 @@ port = 18789
 | `AUXLOCLAW_REQUIRE_AUTH` | Require bearer auth on API routes |
 | `AUXLOCLAW_API_KEY` | API key for bearer auth |
 
+### Context Pruning
+
+AUXLOCLAW now limits provider request context to recent conversation turns while keeping older history persisted on disk.
+
+Defaults:
+
+```toml
+[agent]
+recent_history_turns = 10
+context_window_tokens = 20000
+tool_output_max_chars = 4000
+```
+
+Behavior:
+
+- Keeps the last `recent_history_turns` conversational turns in active model context.
+- Compresses older history into a short summary marker instead of replaying every prior message.
+- Truncates large tool outputs before feeding them back to the model.
+- Uses `context_window_tokens` as a final estimated budget guard.
+- Still persists full session history in memory storage for recall, reflection, checkpoints, and rollback.
+
 ### Capability Registry and Self-Awareness
 
 AUXLOCLAW now has a runtime capability registry that the agent injects into its own system prompt so it knows what it can do during normal chat sessions.
@@ -474,6 +495,6 @@ MIT License - see [LICENSE](LICENSE) file.
 
 <div align="center">
 
-**Built with ❤️ by [Auxlo](https://auxlo.xyz)**
+**Built with love by [Auxlo](https://auxlo.xyz)**
 
 </div>
