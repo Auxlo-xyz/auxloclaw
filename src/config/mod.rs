@@ -46,7 +46,7 @@ impl Default for AgentConfig {
             default_model: "nvidia/llama-3.1-nemotron-70b-instruct".into(),
             max_tokens: 8192,
             temperature: 1.0,
-            max_tool_iterations: 50,
+            max_tool_iterations: 100,
             context_window_tokens: 20000,
             recent_history_turns: 60,
             tool_output_max_chars: 4_000,
