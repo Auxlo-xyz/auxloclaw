@@ -1,4 +1,4 @@
-//! Telegram channel adapter with full command support
+//! Telegram channel adapter with full command support.
 
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
@@ -8,53 +8,45 @@ use tokio::sync::RwLock;
 use teloxide::{
     dispatching::Dispatcher,
     prelude::*,
-    types::{ChatAction, ParseMode, Update, ChatId},
+    types::{ChatAction, ChatId, ParseMode, Update},
     utils::command::BotCommands,
     Bot,
 };
 
 use crate::agent::AgentCore;
-use crate::config::TelegramConfig;
 use crate::channels::markdown::markdown_to_telegram;
-use crate::persona::PersonaConfig;
+use crate::config::TelegramConfig;
+use crate::persona::shared::{
+    load_current_persona, reset_persona, set_behavior, set_length, set_name, set_no_em_dashes,
+    set_no_emojis, set_tone, toggle_no_em_dashes, toggle_no_emojis,
+};
 
-/// Telegram commands
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase")]
 pub enum Command {
     #[command(description = "View agent memory")]
     Memory,
-
     #[command(description = "Clear conversation history")]
     Clear,
-
     #[command(description = "List available tools")]
     Tools,
-
     #[command(description = "View token usage statistics")]
     Usage,
-
     #[command(description = "Recover from crashed session")]
     Recover,
-
     #[command(description = "Show help message")]
     Help,
-
     #[command(description = "Check bot status")]
     Status,
-
     #[command(description = "Toggle voice mode or set voice")]
     Voice,
-
-    #[command(description = "Manage agent personas")]
+    #[command(description = "Manage agent persona")]
     Persona,
-
     #[command(description = "Start a new session")]
     New,
 }
 
-/// Session state per chat
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct SessionState {
     message_count: u64,
     total_tokens: u64,
@@ -66,21 +58,34 @@ struct SessionState {
     last_activity: chrono::DateTime<chrono::Utc>,
 }
 
-/// Global Telegram state
+impl Default for SessionState {
+    fn default() -> Self {
+        let now = chrono::Utc::now();
+        Self {
+            message_count: 0,
+            total_tokens: 0,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            created_at: now,
+            voice_mode: false,
+            voice_id: None,
+            last_activity: now,
+        }
+    }
+}
+
 pub struct TelegramState {
     agent: Arc<AgentCore>,
     sessions: RwLock<HashMap<i64, SessionState>>,
     config: TelegramConfig,
-    persona: PersonaConfig,
 }
 
 impl TelegramState {
-    pub fn new(agent: Arc<AgentCore>, config: TelegramConfig, persona: PersonaConfig) -> Self {
+    pub fn new(agent: Arc<AgentCore>, config: TelegramConfig) -> Self {
         Self {
             agent,
             sessions: RwLock::new(HashMap::new()),
             config,
-            persona,
         }
     }
 
@@ -122,44 +127,72 @@ impl TelegramState {
     }
 }
 
-/// Start Telegram gateway
-pub async fn start(agent: Arc<AgentCore>, config: Option<TelegramConfig>, persona: PersonaConfig) -> Result<()> {
+pub async fn start(
+    agent: Arc<AgentCore>,
+    config: Option<TelegramConfig>,
+    _persona: crate::persona::PersonaConfig,
+) -> Result<()> {
     let config = config.ok_or_else(|| anyhow!("Telegram config required"))?;
-
     if !config.enabled || config.token.is_empty() {
-        tracing::info!("📱 Telegram gateway disabled");
+        tracing::info!("Telegram gateway disabled");
         return Ok(());
     }
 
-    tracing::info!(
-        "📱 Telegram gateway started (token: {}...)",
-        &config.token.chars().take(8).collect::<String>()
-    );
-
     let bot = Bot::new(config.token.clone());
-    let state = Arc::new(TelegramState::new(agent, config, persona));
+    let state = Arc::new(TelegramState::new(agent, config));
 
-    // Set bot commands
     let commands = vec![
-        teloxide::types::BotCommand { command: "memory".into(), description: "View agent memory".into() },
-        teloxide::types::BotCommand { command: "clear".into(), description: "Clear conversation history".into() },
-        teloxide::types::BotCommand { command: "tools".into(), description: "List available tools".into() },
-        teloxide::types::BotCommand { command: "usage".into(), description: "View token usage statistics".into() },
-        teloxide::types::BotCommand { command: "recover".into(), description: "Recover from crashed session".into() },
-        teloxide::types::BotCommand { command: "help".into(), description: "Show help message".into() },
-        teloxide::types::BotCommand { command: "status".into(), description: "Check bot status".into() },
-        teloxide::types::BotCommand { command: "voice".into(), description: "Toggle voice mode or set voice".into() },
-        teloxide::types::BotCommand { command: "persona".into(), description: "Manage agent personas".into() },
-        teloxide::types::BotCommand { command: "new".into(), description: "Start a new session".into() },
+        teloxide::types::BotCommand {
+            command: "memory".into(),
+            description: "View agent memory".into(),
+        },
+        teloxide::types::BotCommand {
+            command: "clear".into(),
+            description: "Clear conversation history".into(),
+        },
+        teloxide::types::BotCommand {
+            command: "tools".into(),
+            description: "List available tools".into(),
+        },
+        teloxide::types::BotCommand {
+            command: "usage".into(),
+            description: "View token usage statistics".into(),
+        },
+        teloxide::types::BotCommand {
+            command: "recover".into(),
+            description: "Recover from crashed session".into(),
+        },
+        teloxide::types::BotCommand {
+            command: "help".into(),
+            description: "Show help message".into(),
+        },
+        teloxide::types::BotCommand {
+            command: "status".into(),
+            description: "Check bot status".into(),
+        },
+        teloxide::types::BotCommand {
+            command: "voice".into(),
+            description: "Toggle voice mode or set voice".into(),
+        },
+        teloxide::types::BotCommand {
+            command: "persona".into(),
+            description: "Show or edit persona".into(),
+        },
+        teloxide::types::BotCommand {
+            command: "new".into(),
+            description: "Start new session".into(),
+        },
     ];
     let _ = bot.set_my_commands(commands).await;
 
-    // Create handler
     let handler = dptree::entry()
-        .branch(Update::filter_message().filter_command::<Command>().endpoint(handle_command))
+        .branch(
+            Update::filter_message()
+                .filter_command::<Command>()
+                .endpoint(handle_command),
+        )
         .branch(Update::filter_message().endpoint(handle_message));
 
-    // Start dispatcher
     tokio::spawn(async move {
         Dispatcher::builder(bot, handler)
             .dependencies(dptree::deps![state])
@@ -168,12 +201,61 @@ pub async fn start(agent: Arc<AgentCore>, config: Option<TelegramConfig>, person
             .await;
     });
 
-    // Wait forever
     tokio::signal::ctrl_c().await?;
     Ok(())
 }
 
-/// Handle slash commands
+fn render_persona() -> String {
+    match load_current_persona() {
+        Ok(persona) => format!(
+            "Current persona\n\nName: {}\nLength: {}\nTone: {}\nNo em dashes: {}\nNo emojis: {}\n\nBehavior:\n{}\n\nCommands:\n/persona show\n/persona name <value>\n/persona behavior <value>\n/persona tone <professional|casual|technical|friendly>\n/persona length <concise|balanced|detailed>\n/persona no_emojis <on|off>\n/persona no_em_dashes <on|off>\n/persona reset",
+            persona.name,
+            persona.style.length,
+            persona.style.tone,
+            persona.style.formatting.no_em_dashes,
+            persona.style.formatting.no_emojis,
+            persona.behavior
+        ),
+        Err(e) => format!("Failed to load persona: {e}"),
+    }
+}
+
+fn handle_persona_command_text(text: &str) -> String {
+    let trimmed = text.trim();
+    let rest = trimmed.strip_prefix("/persona").unwrap_or("").trim();
+    if rest.is_empty() || rest == "show" {
+        return render_persona();
+    }
+
+    let mut parts = rest.splitn(2, ' ');
+    let sub = parts.next().unwrap_or("").trim();
+    let arg = parts.next().unwrap_or("").trim();
+
+    let result = match sub {
+        "name" if !arg.is_empty() => set_name(arg).map(|_| "Persona name updated".to_string()),
+        "behavior" if !arg.is_empty() => set_behavior(arg).map(|_| "Persona behavior updated".to_string()),
+        "tone" if !arg.is_empty() => set_tone(arg).map(|_| format!("Persona tone set to {arg}")),
+        "length" if !arg.is_empty() => set_length(arg).map(|_| format!("Persona length set to {arg}")),
+        "no_emojis" if !arg.is_empty() => {
+            let enabled = matches!(arg, "on" | "true" | "yes" | "1");
+            set_no_emojis(enabled).map(|_| format!("Persona no_emojis set to {enabled}"))
+        }
+        "no_emojis" => toggle_no_emojis().map(|enabled| format!("Persona no_emojis set to {enabled}")),
+        "no_em_dashes" if !arg.is_empty() => {
+            let enabled = matches!(arg, "on" | "true" | "yes" | "1");
+            set_no_em_dashes(enabled).map(|_| format!("Persona no_em_dashes set to {enabled}"))
+        }
+        "no_em_dashes" => toggle_no_em_dashes().map(|enabled| format!("Persona no_em_dashes set to {enabled}")),
+        "reset" => reset_persona().map(|_| "Persona reset to defaults".to_string()),
+        _ => Err(anyhow!("Invalid persona command. Use /persona show, name, behavior, tone, length, no_emojis, no_em_dashes, or reset")),
+    };
+
+    match result {
+        Ok(msg) => format!("{}\n\n{}", msg, render_persona()),
+        Err(e) => format!("{}\n\n{}", e, render_persona()),
+    }
+}
+
 async fn handle_command(
     bot: Bot,
     msg: Message,
@@ -181,200 +263,121 @@ async fn handle_command(
     state: Arc<TelegramState>,
 ) -> ResponseResult<()> {
     let chat_id: i64 = msg.chat.id.0;
-
-    // Show typing indicator for commands too
-    let _ = bot.send_chat_action(ChatId(chat_id), ChatAction::Typing).await;
+    let _ = bot
+        .send_chat_action(ChatId(chat_id), ChatAction::Typing)
+        .await;
 
     let response = match cmd {
-        Command::Memory => {
-            let memory = state.agent.memory_summary().await;
-            format!(
-                "🧠 *Agent Memory*\n\n{}\n\n_Use /clear to reset session_",
-                escape_md(&memory)
-            )
-        }
-
+        Command::Memory => state.agent.memory_summary().await,
         Command::Clear => {
             let session_id = format!("tg:{}", chat_id);
             state.agent.clear_session(&session_id).await;
             state.sessions.write().await.remove(&chat_id);
-            "🗑️ *Session Cleared*\n\nYour conversation history has been reset\\. Starting fresh!".to_string()
+            "Session cleared".to_string()
         }
-
         Command::Tools => {
             let tools = state.agent.list_tools();
-            let mut list = String::from("🔧 *Available Tools*\n\n");
+            let mut list = String::from("Available tools\n\n");
             for tool in tools {
-                list.push_str(&format!("• *{}* \\- {}\n", escape_md(&tool.name), escape_md(&tool.description)));
+                list.push_str(&format!("- {}: {}\n", tool.name, tool.description));
             }
-            list.push_str("\n_Use a tool by describing what you need in your message_");
             list
         }
-
         Command::Usage => {
             let session = state.get_or_create_session(chat_id).await;
             let usage = state.agent.get_usage_stats().await;
             format!(
-                "📊 *Token Usage Statistics*\n\n\
-                *Current Session:*\n\
-                • Messages: {}\n\
-                • Total Tokens: {}\n\
-                • Prompt Tokens: {}\n\
-                • Completion Tokens: {}\n\n\
-                *All\\-Time:*\n\
-                • Total Messages: {}\n\
-                • Total Tokens: {}\n\n\
-                _Session started: {}_",
+                "Current session\nMessages: {}\nTotal tokens: {}\nPrompt tokens: {}\nCompletion tokens: {}\n\nAll-time\nMessages: {}\nTokens: {}",
                 session.message_count,
                 session.total_tokens,
                 session.prompt_tokens,
                 session.completion_tokens,
                 usage.total_messages,
                 usage.total_tokens,
-                session.created_at.format("%Y\\-%m\\-%d %H:%M UTC")
             )
         }
-
         Command::Recover => {
-            let _ = state.agent.recover_session(&format!("tg:{}", chat_id)).await;
-            "♻️ *Session Recovered*\n\nYour session has been restored from the last known state\\.".to_string()
+            let _ = state
+                .agent
+                .recover_session(&format!("tg:{}", chat_id))
+                .await;
+            "Session recovered".to_string()
         }
-
         Command::Help => {
-            format!(
-                "🤖 *{} Help*\n\n\
-                I'm an AI assistant\\. Send me any message and I'll help you\\!\n\n\
-                *Commands:*\n\
-                /memory \\- View agent memory\n\
-                /clear \\- Clear conversation history\n\
-                /tools \\- List available tools\n\
-                /usage \\- View token usage\n\
-                /recover \\- Recover from crash\n\
-                /status \\- Check bot status\n\
-                /voice \\- Toggle voice mode\n\
-                /persona \\- Manage personas\n\
-                /new \\- Start new session\n\n\
-                _Tips:_\n\
-                • Be specific in your requests\n\
-                • I can use tools to help you\n\
-                • Use /new to reset context",
-                escape_md(&state.persona.name)
-            )
+            "Commands: /memory /clear /tools /usage /recover /status /voice /persona /new"
+                .to_string()
         }
-
         Command::Status => {
             let session = state.get_or_create_session(chat_id).await;
             let uptime = chrono::Utc::now() - session.created_at;
             format!(
-                "✅ *Bot Status*\n\n\
-                • Status: Online\n\
-                • Uptime: {}h {}m\n\
-                • Active chats: {}\n\
-                • Model: {}\n\
-                • Voice mode: {}\n\
-                • Last activity: {}",
+                "Status: Online\nUptime: {}h {}m\nActive chats: {}\nModel: {}\nVoice mode: {}",
                 uptime.num_hours(),
                 uptime.num_minutes() % 60,
                 state.sessions.read().await.len(),
-                escape_md(state.agent.model_name()),
+                state.agent.model_name(),
                 if session.voice_mode { "ON" } else { "OFF" },
-                session.last_activity.format("%H:%M:%S UTC")
             )
         }
-
         Command::Voice => {
             let mut sessions = state.sessions.write().await;
-            if let Some(session) = sessions.get_mut(&chat_id) {
-                session.voice_mode = !session.voice_mode;
-                let status = if session.voice_mode { "ON" } else { "OFF" };
-                format!("🎤 *Voice Mode: {}*\n\n{}", status, 
-                    if session.voice_mode {
-                        "I'll respond with voice messages\\. Use /voice again to toggle off\\."
-                    } else {
-                        "Voice mode disabled\\. I'll respond with text\\."
-                    }
-                )
-            } else {
-                "❌ No active session\\. Send a message first\\!".to_string()
-            }
-        }
-
-        Command::Persona => {
+            let session = sessions.entry(chat_id).or_default();
+            session.voice_mode = !session.voice_mode;
             format!(
-                "🎭 *Current Persona*\n\n\
-                *Name:* {}\n\n\
-                *Behavior:*\n{}\n\n\
-                *Style:*\n\
-                • Length: {}\n\
-                • Tone: {}\n\
-                • No em dashes: {}\n\
-                • No emojis: {}\n\n\
-                _Edit persona via CLI: auxloclaw persona_",
-                escape_md(&state.persona.name),
-                escape_md(&state.persona.behavior),
-                state.persona.style.length,
-                state.persona.style.tone,
-                state.persona.style.formatting.no_em_dashes,
-                state.persona.style.formatting.no_emojis
+                "Voice mode {}",
+                if session.voice_mode { "ON" } else { "OFF" }
             )
         }
-
+        Command::Persona => handle_persona_command_text(msg.text().unwrap_or("/persona")),
         Command::New => {
             let session_id = format!("tg:{}", chat_id);
             state.agent.clear_session(&session_id).await;
             state.clear_session(chat_id).await;
-            "🆕 *New Session Started*\n\nPrevious context cleared\\. I'm ready for a fresh conversation\\!\n\n_What would you like to discuss?_".to_string()
+            "New session started".to_string()
         }
     };
 
-    bot.send_message(ChatId(chat_id), response)
-        .parse_mode(ParseMode::MarkdownV2)
+    bot.send_message(ChatId(chat_id), markdown_to_telegram(&response))
         .await?;
-
     Ok(())
 }
 
-/// Handle regular messages
-async fn handle_message(
-    bot: Bot,
-    msg: Message,
-    state: Arc<TelegramState>,
-) -> ResponseResult<()> {
+async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> ResponseResult<()> {
     let chat_id: i64 = msg.chat.id.0;
     let text = msg.text().unwrap_or("");
-
     if text.is_empty() {
         return Ok(());
     }
+    if text.trim_start().starts_with("/persona") {
+        let response = handle_persona_command_text(text);
+        bot.send_message(ChatId(chat_id), markdown_to_telegram(&response))
+            .await?;
+        return Ok(());
+    }
 
-    // Show typing indicator while processing
-    bot.send_chat_action(ChatId(chat_id), ChatAction::Typing).await?;
-
-    // Get session
+    bot.send_chat_action(ChatId(chat_id), ChatAction::Typing)
+        .await?;
     let session = state.get_or_create_session(chat_id).await;
-
-    // Process with agent
-    let response = state.agent.process(text, None).await;
-
-    // Update session stats
+    let response = state
+        .agent
+        .process(text, Some(&format!("tg:{}", chat_id)))
+        .await;
     state.update_session(chat_id, None).await;
 
-    // Check voice mode
     if session.voice_mode {
-        bot.send_message(ChatId(chat_id), format!("🎤 {}", escape_md(&response)))
-            .parse_mode(ParseMode::MarkdownV2)
-            .await?;
+        bot.send_message(
+            ChatId(chat_id),
+            format!("Voice mode response\n\n{}", response),
+        )
+        .await?;
     } else {
-        // Try to send the message
-        let send_result = bot.send_message(ChatId(chat_id), markdown_to_telegram(&response))
+        let send_result = bot
+            .send_message(ChatId(chat_id), markdown_to_telegram(&response))
             .parse_mode(ParseMode::MarkdownV2)
             .await;
-        
-        if send_result.is_err() {
-            let err_str = format!("{:?}", send_result);
-            // Check if message is too long
+        if let Err(err) = send_result {
+            let err_str = format!("{err:?}");
             if err_str.contains("Message is too long") {
-                tracing::warn!("Response too long, splitting into chunks");
                 let chars: Vec<char> = response.chars().collect();
                 for chunk in chars.chunks(4000) {
                     let chunk_str: String = chunk.iter().collect();
@@ -382,26 +385,9 @@ async fn handle_message(
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 }
             } else {
-                tracing::warn!("Telegram send error: {:?}", send_result);
+                tracing::warn!("Telegram send error: {err_str}");
             }
         }
     }
-
     Ok(())
-}
-
-/// Escape text for MarkdownV2
-fn escape_md(text: &str) -> String {
-    text.replace('\\', "\\\\")
-        .replace('_', "\\_")
-        .replace('*', "\\*")
-        .replace('[', "\\[")
-        .replace(']', "\\]")
-        .replace('(', "\\(")
-        .replace(')', "\\)")
-        .replace('#', "\\#")
-        .replace('+', "\\+")
-        .replace('-', "\\-")
-        .replace('.', "\\.")
-        .replace('!', "\\!")
 }

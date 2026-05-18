@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
+pub mod shared;
+
 /// Persona configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PersonaConfig {
