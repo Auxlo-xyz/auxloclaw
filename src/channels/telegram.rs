@@ -8,13 +8,12 @@ use tokio::sync::RwLock;
 use teloxide::{
     dispatching::Dispatcher,
     prelude::*,
-    types::{ChatAction, ChatId, ParseMode, Update},
+    types::{ChatAction, ChatId, Update},
     utils::command::BotCommands,
     Bot,
 };
 
 use crate::agent::AgentCore;
-use crate::channels::markdown::markdown_to_telegram;
 use crate::config::TelegramConfig;
 use crate::persona::shared::{
     load_current_persona, reset_persona, set_behavior, set_length, set_name, set_no_em_dashes,
@@ -337,7 +336,7 @@ async fn handle_command(
         }
     };
 
-    bot.send_message(ChatId(chat_id), markdown_to_telegram(&response))
+    bot.send_message(ChatId(chat_id), &response)
         .await?;
     Ok(())
 }
@@ -350,7 +349,7 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
     }
     if text.trim_start().starts_with("/persona") {
         let response = handle_persona_command_text(text);
-        bot.send_message(ChatId(chat_id), markdown_to_telegram(&response))
+        bot.send_message(ChatId(chat_id), &response)
             .await?;
         return Ok(());
     }
@@ -372,8 +371,7 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
         .await?;
     } else {
         let send_result = bot
-            .send_message(ChatId(chat_id), markdown_to_telegram(&response))
-            .parse_mode(ParseMode::MarkdownV2)
+            .send_message(ChatId(chat_id), &response)
             .await;
         if let Err(err) = send_result {
             let err_str = format!("{err:?}");
