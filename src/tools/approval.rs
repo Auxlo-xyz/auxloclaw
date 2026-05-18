@@ -264,11 +264,6 @@ fn medium_risk_shell_patterns() -> &'static [&'static str] {
         "chown ",
         "kill ",
         "pkill ",
-        "npm install",
-        "pip install",
-        "cargo install",
-        "bun add",
-        "apt install",
     ]
 }
 

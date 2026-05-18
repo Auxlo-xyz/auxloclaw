@@ -15,8 +15,6 @@ const BLOCKED_PATTERNS: &[&str] = &[
     ":(){:|:&};:",
     "mkfs",
     "dd if=",
-    "${",
-    "$(",
 ];
 
 pub struct Sandbox {

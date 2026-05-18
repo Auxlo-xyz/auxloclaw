@@ -52,8 +52,6 @@ impl Default for ExecutionConfig {
                 ":(){ :|:& };:".into(),
                 "mkfs".into(),
                 "dd if=".into(),
-                "${".into(),
-                "$(".into(),
                 "/etc/passwd".into(),
                 "/etc/shadow".into(),
             ],
