@@ -48,7 +48,7 @@ impl Default for AgentConfig {
             temperature: 1.0,
             max_tool_iterations: 50,
             context_window_tokens: 20000,
-            recent_history_turns: 10,
+            recent_history_turns: 60,
             tool_output_max_chars: 4_000,
             timezone: "UTC".into(),
         }
@@ -77,7 +77,7 @@ fn default_timeout() -> u64 {
     60
 }
 fn default_recent_history_turns() -> usize {
-    10
+    60
 }
 fn default_tool_output_max_chars() -> usize {
     4_000
