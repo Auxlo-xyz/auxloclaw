@@ -49,7 +49,17 @@ impl EventHandler for DiscordHandler {
             let msg_channel = msg.channel_id;
             let http = ctx.http;
 
+            let content_clone = content.clone();
             tokio::spawn(async move {
+                // Check for /update command before passing to agent
+                if content_clone.trim().starts_with("/update") {
+                    let result = crate::commands::update::handle_update().await;
+                    if let Err(e) = msg_channel.say(&http, result).await {
+                        error!("Failed to send Discord message: {}", e);
+                    }
+                    return;
+                }
+
                 // Use the agent to process the message
                 let session_id = Some(user_id.to_string());
                 let response = agent.process(&content, session_id.as_deref()).await;

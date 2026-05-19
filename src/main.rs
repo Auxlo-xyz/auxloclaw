@@ -114,7 +114,12 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Capabilities { json } => {
-            commands::capabilities::handle_capabilities(json).await?;
+            commands::handle_capabilities(json);
+        }
+
+        Commands::Update => {
+            let result = commands::update::handle_update().await;
+            println!("{}", result);
         }
 
         Commands::Stop => {

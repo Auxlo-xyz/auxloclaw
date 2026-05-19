@@ -14,6 +14,7 @@ use teloxide::{
 };
 
 use crate::agent::AgentCore;
+use crate::channels::markdown::markdown_to_telegram;
 use crate::config::TelegramConfig;
 use crate::persona::shared::{
     load_current_persona, reset_persona, set_behavior, set_length, set_name, set_no_em_dashes,
@@ -41,6 +42,8 @@ pub enum Command {
     Voice,
     #[command(description = "Manage agent persona")]
     Persona,
+    #[command(description = "Update auxloclaw to the latest version")]
+    Update,
     #[command(description = "Start a new session")]
     New,
 }
@@ -181,6 +184,10 @@ pub async fn start(
             command: "new".into(),
             description: "Start new session".into(),
         },
+        teloxide::types::BotCommand {
+            command: "update".into(),
+            description: "Update auxloclaw to the latest version".into(),
+        },
     ];
     let _ = bot.set_my_commands(commands).await;
 
@@ -303,7 +310,7 @@ async fn handle_command(
             "Session recovered".to_string()
         }
         Command::Help => {
-            "Commands: /memory /clear /tools /usage /recover /status /voice /persona /new"
+            "Commands: /memory /clear /tools /usage /recover /status /voice /persona /new /update"
                 .to_string()
         }
         Command::Status => {
@@ -328,6 +335,7 @@ async fn handle_command(
             )
         }
         Command::Persona => handle_persona_command_text(msg.text().unwrap_or("/persona")),
+        Command::Update => crate::commands::update::handle_update().await,
         Command::New => {
             let session_id = format!("tg:{}", chat_id);
             state.agent.clear_session(&session_id).await;
@@ -336,8 +344,7 @@ async fn handle_command(
         }
     };
 
-    bot.send_message(ChatId(chat_id), &response)
-        .await?;
+    send_markdown_message(&bot, chat_id, &response).await?;
     Ok(())
 }
 
@@ -349,8 +356,7 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
     }
     if text.trim_start().starts_with("/persona") {
         let response = handle_persona_command_text(text);
-        bot.send_message(ChatId(chat_id), &response)
-            .await?;
+        send_markdown_message(&bot, chat_id, &response).await?;
         return Ok(());
     }
 
@@ -364,28 +370,35 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
     state.update_session(chat_id, None).await;
 
     if session.voice_mode {
-        bot.send_message(
-            ChatId(chat_id),
-            format!("Voice mode response\n\n{}", response),
-        )
-        .await?;
+        let voice_response = format!("Voice mode response\n\n{}", response);
+        send_markdown_message(&bot, chat_id, &voice_response).await?;
     } else {
-        let send_result = bot
-            .send_message(ChatId(chat_id), &response)
-            .await;
-        if let Err(err) = send_result {
-            let err_str = format!("{err:?}");
-            if err_str.contains("Message is too long") {
-                let chars: Vec<char> = response.chars().collect();
-                for chunk in chars.chunks(4000) {
-                    let chunk_str: String = chunk.iter().collect();
-                    let _ = bot.send_message(ChatId(chat_id), &chunk_str).await;
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                }
-            } else {
-                tracing::warn!("Telegram send error: {err_str}");
-            }
+        if let Err(err) = send_markdown_message(&bot, chat_id, &response).await {
+            tracing::warn!("Telegram send error: {err:?}");
         }
     }
     Ok(())
+}
+
+async fn send_markdown_message(bot: &Bot, chat_id: i64, text: &str) -> ResponseResult<()> {
+    for chunk in split_telegram_message(text, 3900) {
+        let formatted = markdown_to_telegram(&chunk);
+        bot.send_message(ChatId(chat_id), formatted)
+            .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+            .await?;
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+    Ok(())
+}
+
+fn split_telegram_message(text: &str, max_chars: usize) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= max_chars {
+        return vec![text.to_string()];
+    }
+
+    chars
+        .chunks(max_chars)
+        .map(|chunk| chunk.iter().collect::<String>())
+        .collect()
 }

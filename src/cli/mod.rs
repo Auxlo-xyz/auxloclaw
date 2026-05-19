@@ -109,6 +109,8 @@ pub enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Update auxloclaw to the latest version
+    Update,
     /// Stop the gateway server
     Stop,
 }
