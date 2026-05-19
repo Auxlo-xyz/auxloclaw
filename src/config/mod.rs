@@ -198,6 +198,15 @@ pub struct MemoryConfig {
     pub reflection_cooldown_secs: u64,
     #[serde(default = "default_reflection_interval")]
     pub reflection_interval_secs: u64,
+    // Skill extraction
+    #[serde(default = "default_extraction_enabled")]
+    pub extraction_enabled: bool,
+    #[serde(default = "default_extraction_min_tools")]
+    pub extraction_min_tool_calls: usize,
+    #[serde(default = "default_extraction_cooldown")]
+    pub extraction_cooldown_secs: u64,
+    #[serde(default = "default_extraction_pattern_threshold")]
+    pub extraction_pattern_threshold: usize,
 }
 
 fn default_compaction_threshold() -> usize {
@@ -217,7 +226,20 @@ fn default_reflection_cooldown() -> u64 {
 }
 fn default_reflection_interval() -> u64 {
     300
-} // 5 minutes of inactivity
+}
+
+fn default_extraction_enabled() -> bool {
+    true
+}
+fn default_extraction_min_tools() -> usize {
+    5
+}
+fn default_extraction_cooldown() -> u64 {
+    600
+}
+fn default_extraction_pattern_threshold() -> usize {
+    2
+}
 
 impl Default for MemoryConfig {
     fn default() -> Self {
@@ -234,6 +256,10 @@ impl Default for MemoryConfig {
             reflection_min_messages: 5,
             reflection_cooldown_secs: 300,
             reflection_interval_secs: 300, // 5 minutes of inactivity
+            extraction_enabled: true,
+            extraction_min_tool_calls: 5,
+            extraction_cooldown_secs: 600,
+            extraction_pattern_threshold: 2,
         }
     }
 }

@@ -16,10 +16,12 @@ use crate::memory::{
     ReflectorConfig, SessionHistory, SessionStore,
 };
 use crate::orchestrator::ToolOrchestrator;
-use crate::persona::PersonaConfig;
+use crate::persona::{shared::load_current_persona, PersonaConfig};
 use crate::plugins::{HookEvent, PluginManager};
 use crate::providers::{CompletionRequest, Message, ProviderPool, ToolCall};
+use crate::skills::{ExtractorConfig, SkillExtractor, ToolTraceEntry};
 use regex::Regex;
+use dirs;
 
 /// Usage statistics
 #[derive(Debug, Clone, Default)]
@@ -48,6 +50,7 @@ pub struct AgentCore {
     reflector: Arc<Reflector>,
     plugins: Arc<PluginManager>,
     checkpoint_manager: Arc<CheckpointManager>,
+    extractor: Arc<SkillExtractor>,
     /// Last activity timestamp per session (epoch seconds)
     last_activity: RwLock<HashMap<String, u64>>,
 }
@@ -63,7 +66,13 @@ impl AgentCore {
         plugins: Arc<PluginManager>,
         checkpoint_manager: Arc<CheckpointManager>,
     ) -> Result<Self> {
-        let persona = config.persona.clone();
+        let persona = load_current_persona().unwrap_or_else(|err| {
+            tracing::warn!(
+                "Failed to load current persona, using config persona: {}",
+                err
+            );
+            config.persona.clone()
+        });
         let data_dir = PathBuf::from(shellexpand::tilde(&config.memory.database_path).into_owned())
             .parent()
             .map(|p| p.to_path_buf())
@@ -78,7 +87,19 @@ impl AgentCore {
             max_messages: config.agent.recent_history_turns * 2,
             max_prompt_chars: (config.agent.context_window_tokens as usize).min(20_000),
         };
-        let reflector = Arc::new(Reflector::new(reflector_config, data_dir));
+        let reflector = Arc::new(Reflector::new(reflector_config, data_dir.clone()));
+
+        let extractor_config = ExtractorConfig {
+            enabled: config.memory.extraction_enabled,
+            min_tool_calls: config.memory.extraction_min_tool_calls,
+            cooldown_secs: config.memory.extraction_cooldown_secs,
+            pattern_threshold: config.memory.extraction_pattern_threshold,
+            skills_dir: dirs::config_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("auxloclaw")
+                .join("skills"),
+        };
+        let extractor = Arc::new(SkillExtractor::new(extractor_config));
 
         Ok(Self {
             config,
@@ -93,6 +114,7 @@ impl AgentCore {
             reflector,
             plugins,
             checkpoint_manager,
+            extractor,
             last_activity: RwLock::new(HashMap::new()),
         })
     }
@@ -151,6 +173,7 @@ impl AgentCore {
         let mut iterations = 0;
         let max_iterations = self.config.agent.max_tool_iterations as usize;
         let mut final_response = String::new();
+        let mut tool_trace: Vec<ToolTraceEntry> = Vec::new();
 
         loop {
             iterations += 1;
@@ -186,6 +209,19 @@ impl AgentCore {
                             // Execute each tool
                             for tool_call in tool_calls {
                                 let result = self.execute_tool(tool_call).await;
+                                let success = !result.starts_with("Tool error:");
+                                let summary = if result.len() > 500 {
+                                    format!("{}...", &result[..500])
+                                } else {
+                                    result.clone()
+                                };
+                                tool_trace.push(ToolTraceEntry {
+                                    tool_name: tool_call.function.name.clone(),
+                                    arguments: tool_call.function.arguments.clone(),
+                                    result_summary: summary,
+                                    success,
+                                    iteration: iterations,
+                                });
 
                                 // Add tool result as a message
                                 messages.push(Message {
@@ -226,6 +262,23 @@ impl AgentCore {
                 result.compacted_messages,
                 result.tokens_saved
             );
+        }
+
+        // Spawn background skill extraction (non-blocking)
+        if !tool_trace.is_empty() {
+            let trace_clone = tool_trace.clone();
+            let session_clone = session_key.clone();
+            let extractor = Arc::clone(&self.extractor);
+            let reflection = self.get_reflections(&session_key).and_then(|mut r| r.pop());
+            let user_msg = effective_message.clone();
+            tokio::spawn(async move {
+                if let Err(e) = extractor
+                    .run(&trace_clone, &session_clone, reflection.as_ref(), &user_msg)
+                    .await
+                {
+                    tracing::warn!("Skill extraction background task failed: {e}");
+                }
+            });
         }
 
         // Filter out <thought></thought> blocks including content using regex
@@ -393,7 +446,14 @@ impl AgentCore {
 
         let tools = self.orchestrator.get_definitions();
         let capability_summary = self.capability_manifest().prompt_summary();
-        let base_prompt = SystemPromptBuilder::new(self.persona.clone())
+        let persona = load_current_persona().unwrap_or_else(|err| {
+            tracing::warn!(
+                "Failed to reload current persona, using cached persona: {}",
+                err
+            );
+            self.persona.clone()
+        });
+        let base_prompt = SystemPromptBuilder::new(persona)
             .with_tools(&tools)
             .with_skills(&[])
             .build();

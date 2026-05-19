@@ -20,9 +20,11 @@ use parking_lot::RwLock;
 
 pub mod registry;
 pub mod installer;
+pub mod extractor;
 
 pub use registry::SkillRegistry;
 pub use installer::SkillInstaller;
+pub use extractor::{ExtractorConfig, SkillExtractor, ToolTraceEntry, ExtractionTrigger};
 
 /// Skill metadata (frontmatter)
 #[derive(Debug, Clone, Serialize, Deserialize)]
