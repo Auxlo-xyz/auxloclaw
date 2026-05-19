@@ -31,10 +31,29 @@ async fn run_update() -> Result<String, anyhow::Error> {
 
     let pull_out = String::from_utf8_lossy(&pull.stdout).trim().to_string();
     if pull_out.contains("Already up to date") {
-        report.push_str("Already up to date.\n");
-    } else {
-        report.push_str(&format!("{pull_out}\n"));
+        // Show current version info so the user knows they are on the latest
+        let hash = Command::new("git")
+            .args(["-C", REPO_DIR, "rev-parse", "--short", "HEAD"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|| "unknown".into());
+
+        let version = Command::new(INSTALL_PATH)
+            .args(["--version"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|| "unknown".into());
+
+        report.push_str(&format!(
+            "Already on the latest version ({hash}).\n{version}"
+        ));
+        return Ok(report);
     }
+    report.push_str(&format!("{pull_out}\n"));
 
     // Step 2: cargo build --release
     report.push_str("Building release binary...\n");
