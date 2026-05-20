@@ -305,7 +305,9 @@ pub async fn handle_code(
         plugins,
         checkpoint_manager,
     )?);
-    agent.set_override_persona(true);
+    // Override the system prompt with the pure coding agent prompt - no persona bleeding
+    let coding_prompt = build_code_system_prompt(&workspace);
+    agent.set_system_prompt_override(coding_prompt).await;
 
     // Process initial task if provided
     let initial_task = if task.is_empty() {

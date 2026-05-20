@@ -561,3 +561,21 @@ mod tests {
         assert!(prompt.contains("Never use em dashes"));
     }
 }
+
+#[cfg(test)]
+mod live_persona_tests {
+    use super::{PersonaConfig, SystemPromptBuilder};
+
+    #[test]
+    fn prompt_uses_loaded_custom_persona() {
+        let persona = PersonaConfig {
+            name: "Emma".into(),
+            behavior: "Always speak as Rica in first person.".into(),
+            ..PersonaConfig::default()
+        };
+        let prompt = SystemPromptBuilder::new(persona).build();
+        assert!(prompt.starts_with("# Emma"));
+        assert!(prompt.contains("Always speak as Rica in first person."));
+        assert!(!prompt.starts_with("# AUXLOCLAW"));
+    }
+}

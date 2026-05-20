@@ -12,8 +12,8 @@ use crate::config::AppConfig;
 use crate::context::build_pruned_messages;
 use crate::memory::{HistoryMessage, SessionHistory, SessionStore};
 use crate::orchestrator::ToolOrchestrator;
-use crate::persona::PersonaConfig;
 use crate::persona::SystemPromptBuilder;
+use crate::persona::{shared::load_current_persona, PersonaConfig};
 use crate::providers::{CompletionRequest, Message, ProviderPool, StreamChunk, ToolCall};
 
 /// Agent events streamed to consumers
@@ -83,7 +83,13 @@ impl StreamingAgent {
         orchestrator: Arc<ToolOrchestrator>,
         session_store: Arc<SessionStore>,
     ) -> Self {
-        let persona = config.persona.clone();
+        let persona = load_current_persona().unwrap_or_else(|err| {
+            tracing::warn!(
+                "Failed to load current persona, using config persona: {}",
+                err
+            );
+            config.persona.clone()
+        });
         Self {
             config,
             providers,
@@ -122,7 +128,13 @@ impl StreamingAgent {
         let providers = self.providers.clone();
         let sessions = self.sessions.clone();
         let session_store = self.session_store.clone();
-        let persona = self.persona.clone();
+        let persona = load_current_persona().unwrap_or_else(|err| {
+            tracing::warn!(
+                "Failed to reload current persona, using cached persona: {}",
+                err
+            );
+            self.persona.clone()
+        });
         let message = message.to_string(); // Clone for 'static lifetime
 
         tokio::spawn(async move {

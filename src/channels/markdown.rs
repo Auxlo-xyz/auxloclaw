@@ -1,170 +1,136 @@
 //! Markdown formatting for Telegram
 //!
 //! Telegram's MarkdownV2 requires escaping: _ * [ ] ( ) ~ ` > # + - = | { } . !
-//! This module converts standard markdown to Telegram-compatible format
+//! This module converts common markdown to Telegram-compatible MarkdownV2.
 
-/// Convert markdown to Telegram MarkdownV2 format
+/// Convert common markdown to Telegram MarkdownV2 format.
 pub fn markdown_to_telegram(text: &str) -> String {
-    let mut result = String::with_capacity(text.len() * 2);
-    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len() * 2);
     let mut i = 0;
 
-    while i < chars.len() {
-        // Handle code blocks first (triple backticks)
-        if i + 2 < chars.len() && chars[i] == '`' && chars[i + 1] == '`' && chars[i + 2] == '`' {
-            // Find end of code block
-            let start = i + 3;
-            let mut end = start;
-            while end + 2 < chars.len() {
-                if chars[end] == '`' && chars[end + 1] == '`' && chars[end + 2] == '`' {
-                    break;
-                }
-                end += 1;
-            }
+    while i < text.len() {
+        let rest = &text[i..];
 
-            // Add code block (code inside doesn't need escaping except for backticks)
-            result.push_str("```\n");
-            for c in &chars[start..end] {
-                if *c == '`' {
-                    result.push_str("\\`");
-                } else {
-                    result.push(*c);
-                }
-            }
-            result.push_str("\n```");
-            i = end + 3;
-            continue;
-        }
-
-        // Handle inline code (single backtick)
-        if chars[i] == '`' {
-            let start = i + 1;
-            let mut end = start;
-            while end < chars.len() && chars[end] != '`' {
-                end += 1;
-            }
-
-            // Add inline code
-            result.push('`');
-            for c in &chars[start..end] {
-                if *c == '`' {
-                    result.push_str("\\`");
-                } else {
-                    result.push(*c);
-                }
-            }
-            result.push('`');
-            i = end + 1;
-            continue;
-        }
-
-        // Handle bold/italic (**text**, *text*, __text__, _text_)
-        if chars[i] == '*' || chars[i] == '_' {
-            let delim = chars[i];
-
-            // Check for bold (**text** or __text__)
-            if i + 1 < chars.len() && chars[i + 1] == delim {
-                let start = i + 2;
-                let mut end = start;
-                while end + 1 < chars.len() {
-                    if chars[end] == delim && chars[end + 1] == delim {
-                        break;
-                    }
-                    end += 1;
-                }
-
-                if end + 1 < chars.len() && chars[end] == delim && chars[end + 1] == delim {
-                    // Bold text
-                    result.push_str(&format!("{}{}{}", delim, delim, delim));
-                    result.push_str(&escape_markdown_v2(
-                        &chars[start..end].iter().collect::<String>(),
-                    ));
-                    result.push_str(&format!("{}{}", delim, delim));
-                    i = end + 2;
-                    continue;
-                }
-            }
-
-            // Check for italic (*text* or _text_)
-            let start = i + 1;
-            let mut end = start;
-            while end < chars.len() && chars[end] != delim {
-                end += 1;
-            }
-
-            if end < chars.len() && chars[end] == delim && end > start {
-                // Italic text
-                result.push(delim);
-                result.push_str(&escape_markdown_v2(
-                    &chars[start..end].iter().collect::<String>(),
-                ));
-                result.push(delim);
-                i = end + 1;
+        if rest.starts_with("```") {
+            if let Some(close_rel) = rest[3..].find("```") {
+                let inner = &rest[3..3 + close_rel];
+                out.push_str("```");
+                out.push_str(&escape_code(inner));
+                out.push_str("```");
+                i += 3 + close_rel + 3;
                 continue;
             }
         }
 
-        // Handle links [text](url)
-        if chars[i] == '[' {
-            let text_start = i + 1;
-            let mut text_end = text_start;
-            while text_end < chars.len() && chars[text_end] != ']' {
-                text_end += 1;
+        if rest.starts_with('`') {
+            if let Some(close_rel) = rest[1..].find('`') {
+                let inner = &rest[1..1 + close_rel];
+                out.push('`');
+                out.push_str(&escape_code(inner));
+                out.push('`');
+                i += 1 + close_rel + 1;
+                continue;
             }
+        }
 
-            if text_end < chars.len() && chars[text_end] == ']' {
-                let url_start = text_end + 1;
-                if url_start < chars.len() && chars[url_start] == '(' {
-                    let url_start = url_start + 1;
-                    let mut url_end = url_start;
-                    while url_end < chars.len() && chars[url_end] != ')' {
-                        url_end += 1;
-                    }
-
-                    if url_end < chars.len() && chars[url_end] == ')' {
-                        // Format as Telegram link: [text](url)
-                        let link_text: String = chars[text_start..text_end].iter().collect();
-                        let link_url: String = chars[url_start..url_end].iter().collect();
-                        result.push('[');
-                        result.push_str(&escape_markdown_v2(&link_text));
-                        result.push_str("](");
-                        result.push_str(&escape_url(&link_url));
-                        result.push(')');
-                        i = url_end + 1;
-                        continue;
-                    }
+        if let Some((marker, telegram_marker, consumed)) = parse_marker(rest) {
+            if let Some(close_rel) = rest[consumed..].find(marker) {
+                let inner_end = consumed + close_rel;
+                let inner = &rest[consumed..inner_end];
+                if !inner.trim().is_empty() {
+                    out.push_str(telegram_marker);
+                    out.push_str(&markdown_to_telegram(inner));
+                    out.push_str(telegram_marker);
+                    i += inner_end + marker.len();
+                    continue;
                 }
             }
         }
 
-        // Escape special characters for MarkdownV2
-        let c = chars[i];
-        if needs_escape(c) {
-            result.push('\\');
+        if rest.starts_with('[') {
+            if let Some((link, consumed)) = parse_link(rest) {
+                out.push_str(&link);
+                i += consumed;
+                continue;
+            }
         }
-        result.push(c);
-        i += 1;
+
+        let ch = rest.chars().next().expect("non-empty string slice");
+        push_escaped_char(&mut out, ch);
+        i += ch.len_utf8();
     }
 
-    result
+    out
 }
 
-/// Escape text for Telegram MarkdownV2
+fn parse_marker(rest: &str) -> Option<(&'static str, &'static str, usize)> {
+    if rest.starts_with("**") {
+        Some(("**", "*", 2))
+    } else if rest.starts_with("__") {
+        Some(("__", "*", 2))
+    } else if rest.starts_with("~~") {
+        Some(("~~", "~", 2))
+    } else if rest.starts_with('*') {
+        Some(("*", "_", 1))
+    } else if rest.starts_with('_') {
+        Some(("_", "_", 1))
+    } else {
+        None
+    }
+}
+
+fn parse_link(rest: &str) -> Option<(String, usize)> {
+    let text_end = rest[1..].find(']')? + 1;
+    let after_text = text_end + 1;
+    if !rest[after_text..].starts_with('(') {
+        return None;
+    }
+
+    let url_start = after_text + 1;
+    let url_end = rest[url_start..].rfind(')')? + url_start;
+    let link_text = &rest[1..text_end];
+    let link_url = &rest[url_start..url_end];
+
+    let mut out = String::new();
+    out.push('[');
+    out.push_str(&escape_markdown_v2(link_text));
+    out.push_str("](");
+    out.push_str(&escape_url(link_url));
+    out.push(')');
+
+    Some((out, url_end + 1))
+}
+
 fn escape_markdown_v2(text: &str) -> String {
-    let mut result = String::with_capacity(text.len() * 2);
-    for c in text.chars() {
-        if needs_escape(c) {
-            result.push('\\');
-        }
-        result.push(c);
+    let mut out = String::with_capacity(text.len() * 2);
+    for ch in text.chars() {
+        push_escaped_char(&mut out, ch);
     }
-    result
+    out
 }
 
-/// Characters that need escaping in Telegram MarkdownV2
-fn needs_escape(c: char) -> bool {
+fn escape_code(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '`' => out.push_str("\\`"),
+            '\\' => out.push_str("\\\\"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn push_escaped_char(out: &mut String, ch: char) {
+    if needs_escape(ch) {
+        out.push('\\');
+    }
+    out.push(ch);
+}
+
+fn needs_escape(ch: char) -> bool {
     matches!(
-        c,
+        ch,
         '_' | '*'
             | '['
             | ']'
@@ -185,18 +151,16 @@ fn needs_escape(c: char) -> bool {
     )
 }
 
-/// Escape URL for Telegram links
 fn escape_url(url: &str) -> String {
-    // URLs in Telegram links need minimal escaping
-    let mut result = String::with_capacity(url.len());
-    for c in url.chars() {
-        match c {
-            ')' => result.push_str("\\)"),
-            '\\' => result.push_str("\\\\"),
-            _ => result.push(c),
+    let mut out = String::with_capacity(url.len());
+    for ch in url.chars() {
+        match ch {
+            ')' => out.push_str("\\)"),
+            '\\' => out.push_str("\\\\"),
+            _ => out.push(ch),
         }
     }
-    result
+    out
 }
 
 #[cfg(test)]
@@ -204,30 +168,64 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_escape_bold() {
-        let input = "**bold text**";
-        let output = markdown_to_telegram(input);
-        assert!(output.contains("*bold text*"));
+    fn converts_double_asterisk_bold() {
+        assert_eq!(markdown_to_telegram("**bold text**"), "*bold text*");
     }
 
     #[test]
-    fn test_escape_italic() {
-        let input = "*italic text*";
-        let output = markdown_to_telegram(input);
-        assert!(output.contains("*italic text*"));
+    fn converts_double_underscore_bold() {
+        assert_eq!(markdown_to_telegram("__bold text__"), "*bold text*");
     }
 
     #[test]
-    fn test_escape_special_chars() {
-        let input = "Hello! How are you?";
-        let output = markdown_to_telegram(input);
-        assert!(output.contains("Hello\\! How are you?"));
+    fn converts_single_asterisk_italic() {
+        assert_eq!(markdown_to_telegram("*italic text*"), "_italic text_");
     }
 
     #[test]
-    fn test_code_block() {
+    fn converts_single_underscore_italic() {
+        assert_eq!(markdown_to_telegram("_italic text_"), "_italic text_");
+    }
+
+    #[test]
+    fn converts_strikethrough() {
+        assert_eq!(markdown_to_telegram("~~gone~~"), "~gone~");
+    }
+
+    #[test]
+    fn escapes_plain_special_chars() {
+        assert_eq!(
+            markdown_to_telegram("Hello! How are you?"),
+            "Hello\\! How are you?"
+        );
+    }
+
+    #[test]
+    fn preserves_formatting_and_escapes_inside() {
+        assert_eq!(markdown_to_telegram("**hello!**"), "*hello\\!*");
+    }
+
+    #[test]
+    fn handles_links() {
+        assert_eq!(
+            markdown_to_telegram("[Zo docs](https://docs.zocomputer.com/path_(x))"),
+            "[Zo docs](https://docs.zocomputer.com/path_(x\\))"
+        );
+    }
+
+    #[test]
+    fn handles_inline_code() {
+        assert_eq!(markdown_to_telegram("Use `a_b*` now"), "Use `a_b*` now");
+    }
+
+    #[test]
+    fn handles_code_block() {
         let input = "```python\nprint('hello')\n```";
-        let output = markdown_to_telegram(input);
-        assert!(output.contains("```"));
+        assert_eq!(markdown_to_telegram(input), input);
+    }
+
+    #[test]
+    fn leaves_unmatched_markers_literal_and_escaped() {
+        assert_eq!(markdown_to_telegram("**not closed"), "\\*\\*not closed");
     }
 }

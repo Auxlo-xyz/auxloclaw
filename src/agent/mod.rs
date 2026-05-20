@@ -55,7 +55,7 @@ pub struct AgentCore {
     last_activity: RwLock<HashMap<String, u64>>,
     /// When true, skip loading persona from disk and use config.persona directly.
     /// Used by /code mode to enforce the coding agent persona.
-    override_persona: std::sync::atomic::AtomicBool,
+    override_system_prompt: Arc<RwLock<Option<String>>>,
 }
 
 impl AgentCore {
@@ -119,7 +119,7 @@ impl AgentCore {
             checkpoint_manager,
             extractor,
             last_activity: RwLock::new(HashMap::new()),
-            override_persona: std::sync::atomic::AtomicBool::new(false),
+            override_system_prompt: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -135,8 +135,11 @@ impl AgentCore {
 
     /// Enable override mode to skip loading persona from disk.
     /// Used by /code mode to enforce the coding agent persona.
-    pub fn set_override_persona(&self, val: bool) {
-        self.override_persona.store(val, std::sync::atomic::Ordering::Relaxed);
+    /// Set a system prompt override, completely replacing the normal persona.
+    /// Used by /code mode to inject the pure coding agent prompt.
+    pub async fn set_system_prompt_override(&self, prompt: String) {
+        let mut override_prompt = self.override_system_prompt.write().await;
+        *override_prompt = Some(prompt);
     }
 
     /// Process a message with tool execution loop
@@ -158,7 +161,7 @@ impl AgentCore {
         let history = self.get_history(&session_key).await;
         let reflections = self.get_reflections(&session_key).unwrap_or_else(Vec::new);
 
-        let mut system_prompt = self.build_system_prompt();
+        let mut system_prompt = self.build_system_prompt().await;
         if !reflections.is_empty() {
             system_prompt.push_str("\n\n## Recent Reflections\nOnly the newest bounded reflections are included to avoid context bloat.\n");
             for reflection in reflections.iter().take(3) {
@@ -451,22 +454,28 @@ impl AgentCore {
         CapabilityManifest::new(&self.config, Some(&self.orchestrator))
     }
 
-    fn build_system_prompt(&self) -> String {
+    async fn build_system_prompt(&self) -> String {
         use crate::persona::SystemPromptBuilder;
 
         let tools = self.orchestrator.get_definitions();
         let capability_summary = self.capability_manifest().prompt_summary();
-        let persona = if self.override_persona.load(std::sync::atomic::Ordering::Relaxed) {
+
+        // Check if there's an override system prompt (e.g., /code mode)
+        {
+            let override_lock = self.override_system_prompt.read().await;
+            if let Some(ref override_prompt) = *override_lock {
+                return format!("{}\n\n{}", override_prompt, capability_summary);
+            }
+        }
+
+        // Normal persona flow
+        let persona = load_current_persona().unwrap_or_else(|err| {
+            tracing::warn!(
+                "Failed to reload current persona, using cached persona: {}",
+                err
+            );
             self.persona.clone()
-        } else {
-            load_current_persona().unwrap_or_else(|err| {
-                tracing::warn!(
-                    "Failed to reload current persona, using cached persona: {}",
-                    err
-                );
-                self.persona.clone()
-            })
-        };
+        });
         let base_prompt = SystemPromptBuilder::new(persona)
             .with_tools(&tools)
             .with_skills(&[])
