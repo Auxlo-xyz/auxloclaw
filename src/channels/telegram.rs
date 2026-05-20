@@ -211,6 +211,10 @@ pub async fn start(
             command: "code".into(),
             description: "Start a coding session in isolated workspace".into(),
         },
+        teloxide::types::BotCommand {
+            command: "normal".into(),
+            description: "Exit coding mode and return to normal persona".into(),
+        },
     ];
     let _ = bot.set_my_commands(commands).await;
 
