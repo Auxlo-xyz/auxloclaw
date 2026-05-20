@@ -52,6 +52,30 @@ pub enum Command {
     Normal,
 }
 
+
+
+/// Spawn a background task that sends the typing indicator every 4 seconds
+/// until the returned guard is dropped (i.e. processing completes).
+fn spawn_typing_loop(bot: &Bot, chat_id: i64) -> tokio::sync::oneshot::Sender<()> {
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let bot = bot.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(4));
+        tokio::pin!(let cancel = rx;);
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let _ = bot.send_chat_action(ChatId(chat_id), ChatAction::Typing).await;
+                }
+                _ = &mut cancel => {
+                    break;
+                }
+            }
+        }
+    });
+    tx
+}
+
 #[derive(Debug, Clone)]
 struct SessionState {
     message_count: u64,
@@ -296,9 +320,7 @@ async fn handle_command(
     state: Arc<TelegramState>,
 ) -> ResponseResult<()> {
     let chat_id: i64 = msg.chat.id.0;
-    let _ = bot
-        .send_chat_action(ChatId(chat_id), ChatAction::Typing)
-        .await;
+    let _typing_guard = spawn_typing_loop(&bot, chat_id);
 
     let response = match cmd {
         Command::Memory => state.agent.memory_summary().await,
@@ -417,8 +439,7 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
         return Ok(());
     }
 
-    bot.send_chat_action(ChatId(chat_id), ChatAction::Typing)
-        .await?;
+    let _typing_guard = spawn_typing_loop(&bot, chat_id);
     let session = state.get_or_create_session(chat_id).await;
     // Route through code session if in code mode
     let session_id = if state.is_coding(chat_id).await {

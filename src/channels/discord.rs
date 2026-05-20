@@ -106,6 +106,7 @@ impl EventHandler for DiscordHandler {
                 } else {
                     Some(user_id.to_string())
                 };
+                let _typing = msg_channel.start_typing(&http);
                 let response = agent.process(&content, session_id.as_deref()).await;
 
                 // Use the simple say method for serenity 0.12
