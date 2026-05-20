@@ -192,58 +192,20 @@ pub async fn start(
     let state = Arc::new(TelegramState::new(agent, model_store, config));
 
     let commands = vec![
-        teloxide::types::BotCommand {
-            command: "memory".into(),
-            description: "View agent memory".into(),
-        },
-        teloxide::types::BotCommand {
-            command: "clear".into(),
-            description: "Clear conversation history".into(),
-        },
-        teloxide::types::BotCommand {
-            command: "tools".into(),
-            description: "List available tools".into(),
-        },
-        teloxide::types::BotCommand {
-            command: "usage".into(),
-            description: "View token usage statistics".into(),
-        },
-        teloxide::types::BotCommand {
-            command: "recover".into(),
-            description: "Recover from crashed session".into(),
-        },
-        teloxide::types::BotCommand {
-            command: "help".into(),
-            description: "Show help message".into(),
-        },
-        teloxide::types::BotCommand {
-            command: "status".into(),
-            description: "Check bot status".into(),
-        },
-        teloxide::types::BotCommand {
-            command: "voice".into(),
-            description: "Toggle voice mode or set voice".into(),
-        },
-        teloxide::types::BotCommand {
-            command: "persona".into(),
-            description: "Show or edit persona".into(),
-        },
-        teloxide::types::BotCommand {
-            command: "new".into(),
-            description: "Start new session".into(),
-        },
-        teloxide::types::BotCommand {
-            command: "update".into(),
-            description: "Update auxloclaw to the latest version".into(),
-        },
-        teloxide::types::BotCommand {
-            command: "code".into(),
-            description: "Start a coding session in isolated workspace".into(),
-        },
-        teloxide::types::BotCommand {
-            command: "normal".into(),
-            description: "Exit coding mode and return to normal persona".into(),
-        },
+        teloxide::types::BotCommand { command: "memory".into(), description: "View agent memory".into() },
+        teloxide::types::BotCommand { command: "clear".into(), description: "Clear conversation history".into() },
+        teloxide::types::BotCommand { command: "tools".into(), description: "List available tools".into() },
+        teloxide::types::BotCommand { command: "usage".into(), description: "View token usage statistics".into() },
+        teloxide::types::BotCommand { command: "recover".into(), description: "Recover from crashed session".into() },
+        teloxide::types::BotCommand { command: "help".into(), description: "Show help message".into() },
+        teloxide::types::BotCommand { command: "status".into(), description: "Check bot status".into() },
+        teloxide::types::BotCommand { command: "voice".into(), description: "Toggle voice mode or set voice".into() },
+        teloxide::types::BotCommand { command: "persona".into(), description: "Show or edit persona".into() },
+        teloxide::types::BotCommand { command: "new".into(), description: "Start new session".into() },
+        teloxide::types::BotCommand { command: "update".into(), description: "Update auxloclaw to the latest version".into() },
+        teloxide::types::BotCommand { command: "code".into(), description: "Start a coding session in isolated workspace".into() },
+        teloxide::types::BotCommand { command: "normal".into(), description: "Exit coding mode and return to normal persona".into() },
+        teloxide::types::BotCommand { command: "model".into(), description: "Override model/provider settings".into() },
     ];
     let _ = bot.set_my_commands(commands).await;
 
