@@ -362,6 +362,7 @@ async fn handle_command(
                 });
             let _ = crate::commands::code::init_workspace(&workspace);
             let code_prompt = crate::commands::code::build_code_system_prompt(&workspace);
+            state.agent.set_session_context("telegram", &format!("{}", chat_id)).await;
             state.agent.set_system_prompt_override(&format!("tg:{}", chat_id), code_prompt).await;
             state.enter_code_mode(chat_id, workspace.display().to_string()).await;
             format!(
@@ -428,6 +429,7 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
     } else {
         format!("tg:{}", chat_id)
     };
+    state.agent.set_session_context("telegram", &format!("{}", chat_id)).await;
     let response = state
         .agent
         .process(text, Some(&session_id))

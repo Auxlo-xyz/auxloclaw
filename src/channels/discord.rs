@@ -70,6 +70,7 @@ impl EventHandler for DiscordHandler {
                         });
                     let _ = crate::commands::code::init_workspace(&workspace);
                     let code_prompt = crate::commands::code::build_code_system_prompt(&workspace);
+                    agent.set_session_context("discord", &format!("{}", msg.author.id.get())).await;
                     agent.set_system_prompt_override(&format!("dc:{}", msg.author.id.get()), code_prompt).await;
                     coding_users.write().await.insert(user_id.get());
                     let response = format!(
@@ -109,6 +110,7 @@ impl EventHandler for DiscordHandler {
                     Some(user_id.to_string())
                 };
                 let _typing = msg_channel.start_typing(&http);
+                agent.set_session_context("discord", &format!("{}", msg.author.id.get())).await;
                 let response = agent.process(&content, session_id.as_deref()).await;
 
                 // Use the simple say method for serenity 0.12

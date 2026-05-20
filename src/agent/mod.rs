@@ -174,6 +174,11 @@ impl AgentCore {
     }
 
     /// Process a message with tool execution loop
+    pub async fn set_session_context(&self, channel: &str, user_id: &str) {
+        *self.current_channel.write() = Some(channel.to_string());
+        *self.current_user_id.write() = Some(user_id.to_string());
+    }
+
     pub async fn process(&self, message: &str, session_id: Option<&str>) -> String {
         let session_key = session_id
             .map(|id| id.to_string())
@@ -488,6 +493,9 @@ impl AgentCore {
                 _ => None,
             }
         }.unwrap_or_else(|| self.config.agent.default_model.clone());
+
+        let is_override = self.current_channel.read().is_some();
+        tracing::info!("Using model: {} (user_override: {})", effective_model, is_override);
 
         CompletionRequest {
             model: effective_model,
