@@ -50,6 +50,8 @@ pub enum Command {
     New,
     #[command(description = "Exit coding mode")]
     Normal,
+    #[command(description = "Override model/provider settings")]
+    Model(String),
 }
 
 
@@ -106,6 +108,7 @@ impl Default for SessionState {
 
 pub struct TelegramState {
     agent: Arc<AgentCore>,
+    model_store: Arc<crate::memory::model_store::ModelStore>,
     sessions: RwLock<HashMap<i64, SessionState>>,
     /// Tracks chats that are in /code mode: chat_id -> workspace_path
     coding_chats: RwLock<HashMap<i64, String>>,
@@ -113,9 +116,10 @@ pub struct TelegramState {
 }
 
 impl TelegramState {
-    pub fn new(agent: Arc<AgentCore>, config: TelegramConfig) -> Self {
+    pub fn new(agent: Arc<AgentCore>, model_store: Arc<crate::memory::model_store::ModelStore>, config: TelegramConfig) -> Self {
         Self {
             agent,
+            model_store,
             sessions: RwLock::new(HashMap::new()),
             coding_chats: RwLock::new(HashMap::new()),
             config,
@@ -174,6 +178,7 @@ impl TelegramState {
 
 pub async fn start(
     agent: Arc<AgentCore>,
+    model_store: Arc<crate::memory::model_store::ModelStore>,
     config: Option<TelegramConfig>,
     _persona: crate::persona::PersonaConfig,
 ) -> Result<()> {
@@ -184,7 +189,7 @@ pub async fn start(
     }
 
     let bot = Bot::new(config.token.clone());
-    let state = Arc::new(TelegramState::new(agent, config));
+    let state = Arc::new(TelegramState::new(agent, model_store, config));
 
     let commands = vec![
         teloxide::types::BotCommand {
@@ -401,6 +406,20 @@ async fn handle_command(
                 "Coding mode activated.\nWorkspace: {}\n\nSend your coding task as the next message. Use /normal to exit coding mode.",
                 workspace.display()
             )
+        }
+        Command::Model(args) => {
+            let user_id = msg.from().map(|u| u.id.0).unwrap_or(0);
+            let response = match crate::commands::model::handle_model(
+                &state.model_store,
+                "telegram",
+                &user_id.to_string(),
+                &args,
+            ) {
+                Ok(resp) => resp,
+                Err(e) => format!("Error: {}", e),
+            };
+            send_markdown_message(&bot, chat_id, &response).await?;
+            return Ok(());
         }
         Command::Normal => {
             state.exit_code_mode(chat_id).await;

@@ -87,6 +87,24 @@ pub enum Commands {
         #[arg(short, long)]
         session: Option<String>,
     },
+    /// Override model/provider settings for your session
+    /// Usage: auxloclaw model [model_id] [--base URL] [--key API_KEY]
+    Model {
+        /// Model ID (e.g. gpt-4o, claude-3, gemma-7b)
+        model_id: Option<String>,
+        /// Provider base URL (e.g. https://api.openai.com/v1)
+        #[arg(long)]
+        base: Option<String>,
+        /// API key for the provider
+        #[arg(long)]
+        key: Option<String>,
+        /// Clear model override and revert to defaults
+        #[arg(long)]
+        reset: bool,
+        /// Show current override without changing it
+        #[arg(long)]
+        show: bool,
+    },
     /// Run a skill
     Run {
         skill: String,

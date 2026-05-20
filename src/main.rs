@@ -129,6 +129,35 @@ async fn main() -> anyhow::Result<()> {
         Commands::Stop => {
             commands::stop::handle_stop()?;
         }
+
+        Commands::Model { model_id, base, key, reset, show } => {
+            let session_db = dirs::home_dir()
+                .map(|h| h.join(".auxloclaw/sessions"))
+                .ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?;
+            let session_db_parent = session_db.parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| std::path::PathBuf::from("~/.auxloclaw"));
+            let model_store = memory::model_store::ModelStore::new(&session_db_parent)?;
+            let user_id = "cli";
+            let channel = "cli";
+            if reset {
+                if model_store.delete(channel, user_id)? {
+                    println!("Model override cleared.");
+                } else {
+                    println!("No model override was set.");
+                }
+            } else if show || (model_id.is_none() && base.is_none() && key.is_none()) {
+                let resp = commands::model::handle_model(&model_store, channel, user_id, "")?;
+                println!("{}", resp);
+            } else {
+                let mut args = Vec::new();
+                if let Some(ref m) = model_id { args.push(m.clone()); }
+                if let Some(ref b) = base { args.push(format!("--base {}", b)); }
+                if let Some(ref k) = key { args.push(format!("--key {}", k)); }
+                let resp = commands::model::handle_model(&model_store, channel, user_id, &args.join(" "))?;
+                println!("{}", resp);
+            }
+        }
     }
 
     Ok(())
@@ -161,6 +190,9 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
 
     // Expand tilde in database path
     let session_db = shellexpand::tilde(&config.memory.database_path).into_owned();
+    let session_db_parent = std::path::Path::new(&session_db).parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("~/.auxloclaw"));
 
     // Initialize core components
     let memory = Arc::new(memory::MemoryEngine::new(&config.memory)?);
@@ -179,6 +211,7 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     // Initialize persistent session store
     let session_store = Arc::new(memory::SessionStore::new(&session_db)?);
     let code_mode = Arc::new(memory::CodeModeStore::new(&session_db)?);
+    let model_store = Arc::new(memory::model_store::ModelStore::new(&session_db_parent)?);
     let checkpoint_manager = Arc::new(CheckpointManager::new(&session_db)?);
 
     plugins.run_lifecycle(plugins::HookEvent::Startup).await;
@@ -190,6 +223,7 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
         config.clone(),
         session_store,
         code_mode.clone(),
+        model_store.clone(),
         plugins.clone(),
         checkpoint_manager.clone(),
     )?);
@@ -228,12 +262,13 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     });
 
     // Start Telegram channel if enabled
+    let model_store_discord = model_store.clone();
     let _discord_handle = if config.channels.discord.enabled {
         let discord_agent = agent.clone();
         let discord_config = config.channels.discord.clone();
         info!("💬 Starting Discord gateway...");
         Some(tokio::spawn(async move {
-            if let Err(e) = channels::discord::start(discord_agent, Some(discord_config)).await {
+            if let Err(e) = channels::discord::start(discord_agent, model_store_discord, Some(discord_config)).await {
                 tracing::error!("Discord error: {}", e);
             }
         }))
@@ -247,7 +282,7 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
         let tg_persona = config.persona.clone();
         info!("📱 Starting Telegram gateway...");
         Some(tokio::spawn(async move {
-            if let Err(e) = channels::telegram::start(tg_agent, Some(tg_config), tg_persona).await {
+            if let Err(e) = channels::telegram::start(tg_agent, model_store.clone(), Some(tg_config), tg_persona).await {
                 tracing::error!("Telegram error: {}", e);
             }
         }))

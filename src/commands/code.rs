@@ -292,6 +292,10 @@ pub async fn handle_code(
     let orchestrator = Arc::new(crate::orchestrator::ToolOrchestrator::new());
     let session_db = shellexpand::tilde(&config.memory.database_path).into_owned();
     let session_store = Arc::new(crate::memory::SessionStore::new(&session_db)?);
+    let data_dir = std::path::Path::new(&session_db).parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("~/.auxloclaw"));
+    let model_store = Arc::new(crate::memory::model_store::ModelStore::new(&data_dir)?);
     let code_mode = Arc::new(crate::memory::CodeModeStore::new(
         &config.memory.database_path
     )?);
@@ -306,6 +310,7 @@ pub async fn handle_code(
         config.clone(),
         session_store,
         code_mode,
+        model_store,
         plugins,
         checkpoint_manager,
     )?);

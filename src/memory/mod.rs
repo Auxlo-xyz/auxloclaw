@@ -13,6 +13,7 @@ use std::fs;
 use crate::config::MemoryConfig;
 
 pub mod compactor;
+pub mod model_store;
 pub mod reflector;
 
 pub use compactor::{Compactor, CompactionResult, CompactionSummary};

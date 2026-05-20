@@ -48,6 +48,7 @@ pub struct AgentCore {
     pub sessions: RwLock<HashMap<String, SessionHistory>>,
     session_store: Arc<SessionStore>,
     code_mode: Arc<CodeModeStore>,
+    model_store: Arc<crate::memory::model_store::ModelStore>,
     compactor: Arc<Compactor>,
     reflector: Arc<Reflector>,
     plugins: Arc<PluginManager>,
@@ -55,6 +56,10 @@ pub struct AgentCore {
     extractor: Arc<SkillExtractor>,
     /// Last activity timestamp per session (epoch seconds)
     last_activity: RwLock<HashMap<String, u64>>,
+    /// Channel name of the current request (set per-request)
+    current_channel: parking_lot::RwLock<Option<String>>,
+    /// User ID of the current request (set per-request)
+    current_user_id: parking_lot::RwLock<Option<String>>,
     /// When true, skip loading persona from disk and use config.persona directly.
     /// Used by /code mode to enforce the coding agent persona.
     override_system_prompt: Arc<RwLock<Option<String>>>,
@@ -69,6 +74,7 @@ impl AgentCore {
         config: AppConfig,
         session_store: Arc<SessionStore>,
         code_mode: Arc<CodeModeStore>,
+    model_store: Arc<crate::memory::model_store::ModelStore>,
         plugins: Arc<PluginManager>,
         checkpoint_manager: Arc<CheckpointManager>,
     ) -> Result<Self> {
@@ -117,12 +123,15 @@ impl AgentCore {
             sessions: RwLock::new(HashMap::new()),
             session_store,
             code_mode,
+            model_store,
             compactor,
             reflector,
             plugins,
             checkpoint_manager,
             extractor,
             last_activity: RwLock::new(HashMap::new()),
+            current_channel: parking_lot::RwLock::new(Option::<String>::None),
+            current_user_id: parking_lot::RwLock::new(Option::<String>::None),
             override_system_prompt: Arc::new(RwLock::new(None)),
         })
     }
@@ -465,8 +474,23 @@ impl AgentCore {
             })
             .collect();
 
+        // Resolve per-user model override
+        let effective_model = {
+            let channel = self.current_channel.read();
+            let user_id = self.current_user_id.read();
+            match (channel.as_deref(), user_id.as_deref()) {
+                (Some(ch), Some(uid)) => {
+                    match crate::commands::model::resolve_user_model(&self.model_store, ch, uid) {
+                        Ok((_, _, Some(model))) => Some(model),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            }
+        }.unwrap_or_else(|| self.config.agent.default_model.clone());
+
         CompletionRequest {
-            model: self.config.agent.default_model.clone(),
+            model: effective_model,
             messages,
             temperature: Some(self.config.agent.temperature),
             max_tokens: Some(self.config.agent.max_tokens),

@@ -29,7 +29,11 @@ pub async fn handle_chat(
     // Initialize session store
     let session_db = shellexpand::tilde(&config.memory.database_path).into_owned();
     let session_store = Arc::new(crate::memory::SessionStore::new(&session_db)?);
-        let code_mode = Arc::new(crate::memory::CodeModeStore::new(
+        let data_dir = std::path::Path::new(&session_db).parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("~/.auxloclaw"));
+    let model_store = Arc::new(crate::memory::model_store::ModelStore::new(&data_dir)?);
+    let code_mode = Arc::new(crate::memory::CodeModeStore::new(
             &config.memory.database_path
         )?);
     let checkpoint_manager = Arc::new(CheckpointManager::new(&session_db)?);
@@ -41,6 +45,7 @@ pub async fn handle_chat(
         config.clone(),
         session_store,
         code_mode,
+        model_store,
         plugins.clone(),
         checkpoint_manager.clone(),
     )?);

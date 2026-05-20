@@ -60,6 +60,8 @@ uuid = "1"
 # Crypto & Security
 sha2 = "0.10"
 base64 = "0.22"
+aes-gcm = "0.10"
+hostname = "0.4"
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
@@ -92,3 +94,4 @@ lto = true
 codegen-units = 1
 strip = true
 opt-level = 3
+

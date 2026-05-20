@@ -11,13 +11,15 @@ use tracing::{error, info};
 
 pub struct DiscordHandler {
     agent: Arc<crate::agent::AgentCore>,
+    model_store: Arc<crate::memory::model_store::ModelStore>,
     coding_users: Arc<RwLock<HashSet<u64>>>,
 }
 
 impl DiscordHandler {
-    pub fn new(agent: Arc<crate::agent::AgentCore>) -> Self {
+    pub fn new(agent: Arc<crate::agent::AgentCore>, model_store: Arc<crate::memory::model_store::ModelStore>) -> Self {
         Self {
             agent,
+            model_store,
             coding_users: Arc::new(RwLock::new(HashSet::new())),
         }
     }
@@ -121,6 +123,7 @@ impl EventHandler for DiscordHandler {
 /// Start Discord gateway
 pub async fn start(
     agent: Arc<crate::agent::AgentCore>,
+    model_store: Arc<crate::memory::model_store::ModelStore>,
     config: Option<crate::config::DiscordConfig>,
 ) -> Result<()> {
     if let Some(config) = config {
@@ -133,7 +136,7 @@ pub async fn start(
                 | GatewayIntents::GUILD_MEMBERS;
 
             let mut client = Client::builder(&config.token, intents)
-                .event_handler(DiscordHandler::new(agent))
+                .event_handler(DiscordHandler::new(agent, model_store))
                 .await
                 .map_err(|e| anyhow::anyhow!("Discord client builder error: {}", e))?;
 
