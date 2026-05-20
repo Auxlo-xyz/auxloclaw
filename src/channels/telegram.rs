@@ -190,6 +190,10 @@ pub async fn start(
             command: "update".into(),
             description: "Update auxloclaw to the latest version".into(),
         },
+        teloxide::types::BotCommand {
+            command: "code".into(),
+            description: "Start a coding session in isolated workspace".into(),
+        },
     ];
     let _ = bot.set_my_commands(commands).await;
 
