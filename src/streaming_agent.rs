@@ -197,6 +197,8 @@ impl StreamingAgent {
                     max_tokens: Some(config.agent.max_tokens),
                     tools: Some(tools),
                     stream: Some(true),
+                    base_url: None,
+                    api_key: None,
                 };
 
                 // Get streaming response

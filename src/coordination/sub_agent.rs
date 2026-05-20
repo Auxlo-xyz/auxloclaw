@@ -200,6 +200,8 @@ impl SubAgent {
                     }
                 }).collect()),
                 stream: None,
+                base_url: None,
+                api_key: None,
             };
 
             let completion = self.providers.complete(request).await?;

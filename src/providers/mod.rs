@@ -128,6 +128,41 @@ impl ProviderPool {
         const MAX_RETRIES: u32 = 3;
         const BASE_DELAY_MS: u64 = 1000;
 
+        // If user has set a custom provider override, use it directly
+        if let (Some(base_url), Some(api_key)) = (&request.base_url, &request.api_key) {
+            tracing::info!("Using user-overridden provider: {}", base_url);
+            let custom_provider = OpenAICompatibleProvider {
+                name: "user-override".into(),
+                provider_type: "openai".into(),
+                api_base: base_url.clone(),
+                api_key: api_key.clone(),
+                client: reqwest::Client::new(),
+                extra_headers: std::collections::HashMap::new(),
+            };
+            for attempt in 0..MAX_RETRIES {
+                match custom_provider.complete(request.clone()).await {
+                    Ok(response) => return Ok(response),
+                    Err(e) => {
+                        if attempt < MAX_RETRIES - 1 {
+                            let delay_ms = BASE_DELAY_MS * 2u64.pow(attempt);
+                            tracing::warn!(
+                                "User provider failed (attempt {}), retrying in {}ms: {}",
+                                attempt + 1, delay_ms, e
+                            );
+                            time::sleep(Duration::from_millis(delay_ms)).await;
+                        } else {
+                            tracing::error!(
+                                "User provider failed after {} attempts: {}",
+                                MAX_RETRIES, e
+                            );
+                        }
+                    }
+                }
+            }
+            return Err(anyhow!("User-overridden provider failed after {} attempts", MAX_RETRIES));
+        }
+
+        // Default provider pool path
         let provider = self
             .get_active()
             .await
@@ -513,6 +548,12 @@ pub struct CompletionRequest {
     pub tools: Option<Vec<ToolDefinition>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
+    /// User override: custom base URL for this request (bypasses provider pool)
+    #[serde(skip)]
+    pub base_url: Option<String>,
+    /// User override: custom API key for this request (bypasses provider pool)
+    #[serde(skip)]
+    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

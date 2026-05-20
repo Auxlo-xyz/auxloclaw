@@ -479,20 +479,26 @@ impl AgentCore {
             })
             .collect();
 
-        // Resolve per-user model override
-        let effective_model = {
+        // Resolve per-user model override (model name, base_url, api_key)
+        let (effective_model, user_base_url, user_api_key) = {
             let channel = self.current_channel.read();
             let user_id = self.current_user_id.read();
             match (channel.as_deref(), user_id.as_deref()) {
                 (Some(ch), Some(uid)) => {
                     match crate::commands::model::resolve_user_model(&self.model_store, ch, uid) {
-                        Ok((_, _, Some(model))) => Some(model),
-                        _ => None,
+                        Ok((base_url, api_key, Some(model))) => {
+                            tracing::info!(
+                                "Using user model override: {} base={:?}",
+                                model, base_url
+                            );
+                            (model, base_url, api_key)
+                        }
+                        _ => (self.config.agent.default_model.clone(), None, None),
                     }
                 }
-                _ => None,
+                _ => (self.config.agent.default_model.clone(), None, None),
             }
-        }.unwrap_or_else(|| self.config.agent.default_model.clone());
+        };
 
         let is_override = self.current_channel.read().is_some();
         tracing::info!("Using model: {} (user_override: {})", effective_model, is_override);
@@ -504,6 +510,8 @@ impl AgentCore {
             max_tokens: Some(self.config.agent.max_tokens),
             tools: Some(tools),
             stream: None,
+            base_url: user_base_url,
+            api_key: user_api_key,
         }
     }
 
