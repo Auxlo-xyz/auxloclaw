@@ -44,6 +44,8 @@ pub enum Command {
     Persona,
     #[command(description = "Update auxloclaw to the latest version")]
     Update,
+    #[command(description = "Start a coding session in isolated workspace")]
+    Code,
     #[command(description = "Start a new session")]
     New,
 }
@@ -310,7 +312,7 @@ async fn handle_command(
             "Session recovered".to_string()
         }
         Command::Help => {
-            "Commands: /memory /clear /tools /usage /recover /status /voice /persona /new /update"
+            "Commands: /memory /clear /tools /usage /recover /status /voice /persona /new /update /code"
                 .to_string()
         }
         Command::Status => {
@@ -336,6 +338,20 @@ async fn handle_command(
         }
         Command::Persona => handle_persona_command_text(msg.text().unwrap_or("/persona")),
         Command::Update => crate::commands::update::handle_update().await,
+        Command::Code => {
+            // In Telegram, /code starts a coding session for this chat
+            let session_id = format!("tg-code-{}", chat_id);
+            let workspace = crate::commands::code::ensure_workspace(&session_id)
+                .unwrap_or_else(|e| {
+                    tracing::warn!("Failed to create workspace: {}", e);
+                    std::path::PathBuf::from("/tmp/auxloclaw-code")
+                });
+            let _ = crate::commands::code::init_workspace(&workspace);
+            format!(
+                "Coding session started.\nWorkspace: {}\n\nSend your coding task as the next message.",
+                workspace.display()
+            )
+        }
         Command::New => {
             let session_id = format!("tg:{}", chat_id);
             state.agent.clear_session(&session_id).await;

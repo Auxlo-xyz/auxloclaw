@@ -73,6 +73,20 @@ pub enum Commands {
         #[arg(long)]
         delegation: bool,
     },
+    /// Start a coding session in an isolated workspace
+    Code {
+        /// Initial message/task for the coding agent
+        #[arg(trailing_var_arg = true)]
+        task: Vec<String>,
+
+        /// Project name for the workspace
+        #[arg(short, long)]
+        project: Option<String>,
+
+        /// Resume an existing coding session
+        #[arg(short, long)]
+        session: Option<String>,
+    },
     /// Run a skill
     Run {
         skill: String,

@@ -94,6 +94,10 @@ async fn main() -> anyhow::Result<()> {
             commands::status::handle_status(delegation)?;
         }
 
+        Commands::Code { task, project, session } => {
+            commands::code::handle_code(task, project, session).await?;
+        }
+
         Commands::Run {
             skill,
             args: run_args,

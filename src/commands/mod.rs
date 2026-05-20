@@ -2,6 +2,7 @@
 
 pub mod capabilities;
 pub mod chat;
+pub mod code;
 pub mod config;
 pub mod persona;
 pub mod plan;

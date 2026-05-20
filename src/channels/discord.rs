@@ -51,6 +51,25 @@ impl EventHandler for DiscordHandler {
 
             let content_clone = content.clone();
             tokio::spawn(async move {
+                // Check for /code command before passing to agent
+                if content_clone.trim().starts_with("/code") {
+                    let session_id = format!("discord-code-{}", user_id);
+                    let workspace = crate::commands::code::ensure_workspace(&session_id)
+                        .unwrap_or_else(|e| {
+                            tracing::warn!("Failed to create workspace: {}", e);
+                            std::path::PathBuf::from("/tmp/auxloclaw-code")
+                        });
+                    let _ = crate::commands::code::init_workspace(&workspace);
+                    let response = format!(
+                        "Coding session started.\nWorkspace: {}\n\nSend your coding task as the next message.",
+                        workspace.display()
+                    );
+                    if let Err(e) = msg_channel.say(&http, response).await {
+                        error!("Failed to send Discord message: {}", e);
+                    }
+                    return;
+                }
+
                 // Check for /update command before passing to agent
                 if content_clone.trim().starts_with("/update") {
                     let result = crate::commands::update::handle_update().await;
