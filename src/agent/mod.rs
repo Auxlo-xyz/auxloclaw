@@ -162,6 +162,9 @@ impl AgentCore {
         let reflections = self.get_reflections(&session_key).unwrap_or_else(Vec::new);
 
         let mut system_prompt = self.build_system_prompt().await;
+        tracing::debug!("=== SYSTEM PROMPT START (first 500 chars) ===");
+        tracing::debug!("{}", &system_prompt[..system_prompt.len().min(500)]);
+        tracing::debug!("=== SYSTEM PROMPT END ===");
         if !reflections.is_empty() {
             system_prompt.push_str("\n\n## Recent Reflections\nOnly the newest bounded reflections are included to avoid context bloat.\n");
             for reflection in reflections.iter().take(3) {
@@ -464,11 +467,13 @@ impl AgentCore {
         {
             let override_lock = self.override_system_prompt.read().await;
             if let Some(ref override_prompt) = *override_lock {
+                tracing::info!("[build_system_prompt] OVERRIDE active - bypassing persona, using custom prompt ({} chars)", override_prompt.len());
                 return format!("{}\n\n{}", override_prompt, capability_summary);
             }
         }
 
         // Normal persona flow
+        tracing::info!("[build_system_prompt] No override - using normal persona flow");
         let persona = load_current_persona().unwrap_or_else(|err| {
             tracing::warn!(
                 "Failed to reload current persona, using cached persona: {}",
