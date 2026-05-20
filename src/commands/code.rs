@@ -305,6 +305,7 @@ pub async fn handle_code(
         plugins,
         checkpoint_manager,
     )?);
+    agent.set_override_persona(true);
 
     // Process initial task if provided
     let initial_task = if task.is_empty() {

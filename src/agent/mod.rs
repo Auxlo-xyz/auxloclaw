@@ -53,6 +53,9 @@ pub struct AgentCore {
     extractor: Arc<SkillExtractor>,
     /// Last activity timestamp per session (epoch seconds)
     last_activity: RwLock<HashMap<String, u64>>,
+    /// When true, skip loading persona from disk and use config.persona directly.
+    /// Used by /code mode to enforce the coding agent persona.
+    override_persona: std::sync::atomic::AtomicBool,
 }
 
 impl AgentCore {
@@ -116,6 +119,7 @@ impl AgentCore {
             checkpoint_manager,
             extractor,
             last_activity: RwLock::new(HashMap::new()),
+            override_persona: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -127,6 +131,12 @@ impl AgentCore {
         }
         tracing::info!(" Loaded {} sessions from disk", sessions.len());
         Ok(())
+    }
+
+    /// Enable override mode to skip loading persona from disk.
+    /// Used by /code mode to enforce the coding agent persona.
+    pub fn set_override_persona(&self, val: bool) {
+        self.override_persona.store(val, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Process a message with tool execution loop
@@ -446,13 +456,17 @@ impl AgentCore {
 
         let tools = self.orchestrator.get_definitions();
         let capability_summary = self.capability_manifest().prompt_summary();
-        let persona = load_current_persona().unwrap_or_else(|err| {
-            tracing::warn!(
-                "Failed to reload current persona, using cached persona: {}",
-                err
-            );
+        let persona = if self.override_persona.load(std::sync::atomic::Ordering::Relaxed) {
             self.persona.clone()
-        });
+        } else {
+            load_current_persona().unwrap_or_else(|err| {
+                tracing::warn!(
+                    "Failed to reload current persona, using cached persona: {}",
+                    err
+                );
+                self.persona.clone()
+            })
+        };
         let base_prompt = SystemPromptBuilder::new(persona)
             .with_tools(&tools)
             .with_skills(&[])
