@@ -48,6 +48,8 @@ pub enum Command {
     Code,
     #[command(description = "Start a new session")]
     New,
+    #[command(description = "Exit coding mode")]
+    Normal,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +83,8 @@ impl Default for SessionState {
 pub struct TelegramState {
     agent: Arc<AgentCore>,
     sessions: RwLock<HashMap<i64, SessionState>>,
+    /// Tracks chats that are in /code mode: chat_id -> workspace_path
+    coding_chats: RwLock<HashMap<i64, String>>,
     config: TelegramConfig,
 }
 
@@ -89,6 +93,7 @@ impl TelegramState {
         Self {
             agent,
             sessions: RwLock::new(HashMap::new()),
+            coding_chats: RwLock::new(HashMap::new()),
             config,
         }
     }
@@ -116,6 +121,18 @@ impl TelegramState {
                 session.total_tokens += (prompt + completion) as u64;
             }
         }
+    }
+
+    async fn is_coding(&self, chat_id: i64) -> bool {
+        self.coding_chats.read().await.contains_key(&chat_id)
+    }
+
+    async fn enter_code_mode(&self, chat_id: i64, workspace: String) {
+        self.coding_chats.write().await.insert(chat_id, workspace);
+    }
+
+    async fn exit_code_mode(&self, chat_id: i64) {
+        self.coding_chats.write().await.remove(&chat_id);
     }
 
     async fn clear_session(&self, chat_id: i64) {
@@ -316,7 +333,7 @@ async fn handle_command(
             "Session recovered".to_string()
         }
         Command::Help => {
-            "Commands: /memory /clear /tools /usage /recover /status /voice /persona /new /update /code"
+            "Commands: /memory /clear /tools /usage /recover /status /voice /persona /new /update /code /normal"
                 .to_string()
         }
         Command::Status => {
@@ -343,7 +360,7 @@ async fn handle_command(
         Command::Persona => handle_persona_command_text(msg.text().unwrap_or("/persona")),
         Command::Update => crate::commands::update::handle_update().await,
         Command::Code => {
-            // In Telegram, /code starts a coding session for this chat
+            // Enter code mode: set override on shared agent and track this chat
             let session_id = format!("tg-code-{}", chat_id);
             let workspace = crate::commands::code::ensure_workspace(&session_id)
                 .unwrap_or_else(|e| {
@@ -351,10 +368,18 @@ async fn handle_command(
                     std::path::PathBuf::from("/tmp/auxloclaw-code")
                 });
             let _ = crate::commands::code::init_workspace(&workspace);
+            let code_prompt = crate::commands::code::build_code_system_prompt(&workspace);
+            state.agent.set_system_prompt_override(code_prompt).await;
+            state.enter_code_mode(chat_id, workspace.display().to_string()).await;
             format!(
-                "Coding session started.\nWorkspace: {}\n\nSend your coding task as the next message.",
+                "Coding mode activated.\nWorkspace: {}\n\nSend your coding task as the next message. Use /normal to exit coding mode.",
                 workspace.display()
             )
+        }
+        Command::Normal => {
+            state.exit_code_mode(chat_id).await;
+            state.agent.clear_system_prompt_override().await;
+            "Exited coding mode. Back to normal.".to_string()
         }
         Command::New => {
             let session_id = format!("tg:{}", chat_id);
@@ -380,12 +405,26 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
         return Ok(());
     }
 
+    // Check for /normal command to exit code mode
+    if text.trim() == "/normal" {
+        state.exit_code_mode(chat_id).await;
+        state.agent.clear_system_prompt_override().await;
+        send_markdown_message(&bot, chat_id, "Exited coding mode. Back to normal.").await?;
+        return Ok(());
+    }
+
     bot.send_chat_action(ChatId(chat_id), ChatAction::Typing)
         .await?;
     let session = state.get_or_create_session(chat_id).await;
+    // Route through code session if in code mode
+    let session_id = if state.is_coding(chat_id).await {
+        format!("tg-code-{}", chat_id)
+    } else {
+        format!("tg:{}", chat_id)
+    };
     let response = state
         .agent
-        .process(text, Some(&format!("tg:{}", chat_id)))
+        .process(text, Some(&session_id))
         .await;
     state.update_session(chat_id, None).await;
 

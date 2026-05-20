@@ -4,16 +4,22 @@ use serenity::async_trait;
 use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
 use serenity::prelude::*;
+use std::collections::HashSet;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::{error, info};
 
 pub struct DiscordHandler {
     agent: Arc<crate::agent::AgentCore>,
+    coding_users: Arc<RwLock<HashSet<u64>>>,
 }
 
 impl DiscordHandler {
     pub fn new(agent: Arc<crate::agent::AgentCore>) -> Self {
-        Self { agent }
+        Self {
+            agent,
+            coding_users: Arc::new(RwLock::new(HashSet::new())),
+        }
     }
 }
 
@@ -50,8 +56,9 @@ impl EventHandler for DiscordHandler {
             let http = ctx.http;
 
             let content_clone = content.clone();
+            let coding_users = self.coding_users.clone();
             tokio::spawn(async move {
-                // Check for /code command before passing to agent
+                // Check for /code command
                 if content_clone.trim().starts_with("/code") {
                     let session_id = format!("discord-code-{}", user_id);
                     let workspace = crate::commands::code::ensure_workspace(&session_id)
@@ -60,11 +67,24 @@ impl EventHandler for DiscordHandler {
                             std::path::PathBuf::from("/tmp/auxloclaw-code")
                         });
                     let _ = crate::commands::code::init_workspace(&workspace);
+                    let code_prompt = crate::commands::code::build_code_system_prompt(&workspace);
+                    agent.set_system_prompt_override(code_prompt).await;
+                    coding_users.write().await.insert(user_id.get());
                     let response = format!(
-                        "Coding session started.\nWorkspace: {}\n\nSend your coding task as the next message.",
+                        "Coding mode activated.\nWorkspace: {}\n\nSend your coding task as the next message. Use /normal to exit coding mode.",
                         workspace.display()
                     );
                     if let Err(e) = msg_channel.say(&http, response).await {
+                        error!("Failed to send Discord message: {}", e);
+                    }
+                    return;
+                }
+
+                // Check for /normal to exit code mode
+                if content_clone.trim() == "/normal" {
+                    coding_users.write().await.remove(&user_id.get());
+                    agent.clear_system_prompt_override().await;
+                    if let Err(e) = msg_channel.say(&http, "Exited coding mode. Back to normal.").await {
                         error!("Failed to send Discord message: {}", e);
                     }
                     return;
@@ -79,8 +99,13 @@ impl EventHandler for DiscordHandler {
                     return;
                 }
 
-                // Use the agent to process the message
-                let session_id = Some(user_id.to_string());
+                // Route through code session if in code mode
+                let is_coding = coding_users.read().await.contains(&user_id.get());
+                let session_id = if is_coding {
+                    Some(format!("discord-code-{}", user_id))
+                } else {
+                    Some(user_id.to_string())
+                };
                 let response = agent.process(&content, session_id.as_deref()).await;
 
                 // Use the simple say method for serenity 0.12

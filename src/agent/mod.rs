@@ -142,6 +142,11 @@ impl AgentCore {
         *override_prompt = Some(prompt);
     }
 
+    pub async fn clear_system_prompt_override(&self) {
+        let mut override_prompt = self.override_system_prompt.write().await;
+        *override_prompt = None;
+    }
+
     /// Process a message with tool execution loop
     pub async fn process(&self, message: &str, session_id: Option<&str>) -> String {
         let session_key = session_id
