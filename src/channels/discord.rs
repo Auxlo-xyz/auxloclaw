@@ -68,7 +68,7 @@ impl EventHandler for DiscordHandler {
                         });
                     let _ = crate::commands::code::init_workspace(&workspace);
                     let code_prompt = crate::commands::code::build_code_system_prompt(&workspace);
-                    agent.set_system_prompt_override(code_prompt).await;
+                    agent.set_system_prompt_override(&format!("dc:{}", msg.author.id.get()), code_prompt).await;
                     coding_users.write().await.insert(user_id.get());
                     let response = format!(
                         "Coding mode activated.\nWorkspace: {}\n\nSend your coding task as the next message. Use /normal to exit coding mode.",
@@ -83,7 +83,7 @@ impl EventHandler for DiscordHandler {
                 // Check for /normal to exit code mode
                 if content_clone.trim() == "/normal" {
                     coding_users.write().await.remove(&user_id.get());
-                    agent.clear_system_prompt_override().await;
+                    agent.clear_system_prompt_override(&format!("dc:{}", msg.author.id.get())).await;
                     if let Err(e) = msg_channel.say(&http, "Exited coding mode. Back to normal.").await {
                         error!("Failed to send Discord message: {}", e);
                     }

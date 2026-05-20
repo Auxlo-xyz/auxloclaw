@@ -373,7 +373,7 @@ async fn handle_command(
                 });
             let _ = crate::commands::code::init_workspace(&workspace);
             let code_prompt = crate::commands::code::build_code_system_prompt(&workspace);
-            state.agent.set_system_prompt_override(code_prompt).await;
+            state.agent.set_system_prompt_override(&format!("tg:{}", chat_id), code_prompt).await;
             state.enter_code_mode(chat_id, workspace.display().to_string()).await;
             format!(
                 "Coding mode activated.\nWorkspace: {}\n\nSend your coding task as the next message. Use /normal to exit coding mode.",
@@ -382,7 +382,7 @@ async fn handle_command(
         }
         Command::Normal => {
             state.exit_code_mode(chat_id).await;
-            state.agent.clear_system_prompt_override().await;
+            state.agent.clear_system_prompt_override(&format!("tg:{}", chat_id)).await;
             "Exited coding mode. Back to normal.".to_string()
         }
         Command::New => {
@@ -412,7 +412,7 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
     // Check for /normal command to exit code mode
     if text.trim() == "/normal" {
         state.exit_code_mode(chat_id).await;
-        state.agent.clear_system_prompt_override().await;
+        state.agent.clear_system_prompt_override(&format!("tg:{}", chat_id)).await;
         send_markdown_message(&bot, chat_id, "Exited coding mode. Back to normal.").await?;
         return Ok(());
     }

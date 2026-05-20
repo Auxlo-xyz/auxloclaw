@@ -246,3 +246,83 @@ impl SessionStore {
         Ok(count)
     }
 }
+
+
+/// Persisted code mode state -- survives restarts
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CodeModeState {
+    /// Map of session_key -> override system prompt text
+    pub active_sessions: HashMap<String, String>,
+}
+
+/// Persistent store for code mode overrides
+pub struct CodeModeStore {
+    file_path: PathBuf,
+    state: std::sync::RwLock<CodeModeState>,
+}
+
+impl CodeModeStore {
+    pub fn new(db_path: &str) -> Result<Self> {
+        let dir = PathBuf::from(db_path)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+        
+        fs::create_dir_all(&dir)
+            .with_context(|| format!("Failed to create code mode directory: {:?}", dir))?;
+        
+        let file_path = dir.join("code_mode.json");
+        
+        let state = if file_path.exists() {
+            let data = fs::read_to_string(&file_path)
+                .with_context(|| format!("Failed to read code_mode.json: {:?}", file_path))?;
+            serde_json::from_str(&data).unwrap_or_default()
+        } else {
+            CodeModeState::default()
+        };
+        
+        Ok(Self {
+            file_path,
+            state: std::sync::RwLock::new(state),
+        })
+    }
+    
+    /// Activate code mode for a session with the given override prompt
+    pub fn activate(&self, session_key: &str, override_prompt: String) -> Result<()> {
+        {
+            let mut state = self.state.write().unwrap();
+            state.active_sessions.insert(session_key.to_string(), override_prompt);
+        }
+        self.persist()
+    }
+    
+    /// Deactivate code mode for a session
+    pub fn deactivate(&self, session_key: &str) -> Result<()> {
+        {
+            let mut state = self.state.write().unwrap();
+            state.active_sessions.remove(session_key);
+        }
+        self.persist()
+    }
+    
+    /// Check if a session is in code mode, return the override prompt if so
+    pub fn get_override(&self, session_key: &str) -> Option<String> {
+        let state = self.state.read().unwrap();
+        state.active_sessions.get(session_key).cloned()
+    }
+    
+    /// Get all active code mode sessions
+    pub fn active_sessions(&self) -> Vec<String> {
+        let state = self.state.read().unwrap();
+        state.active_sessions.keys().cloned().collect()
+    }
+    
+    fn persist(&self) -> Result<()> {
+        let state = self.state.read().unwrap();
+        let json = serde_json::to_string_pretty(&*state)
+            .context("Failed to serialize code mode state")?;
+        fs::write(&self.file_path, json)
+            .with_context(|| format!("Failed to write code_mode.json: {:?}", self.file_path))?;
+        Ok(())
+    }
+}

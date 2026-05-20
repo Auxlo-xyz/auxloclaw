@@ -292,6 +292,9 @@ pub async fn handle_code(
     let orchestrator = Arc::new(crate::orchestrator::ToolOrchestrator::new());
     let session_db = shellexpand::tilde(&config.memory.database_path).into_owned();
     let session_store = Arc::new(crate::memory::SessionStore::new(&session_db)?);
+    let code_mode = Arc::new(crate::memory::CodeModeStore::new(
+        &config.memory.database_path
+    )?);
     let checkpoint_manager = Arc::new(crate::checkpoints::CheckpointManager::new(
         &session_db,
     )?);
@@ -302,12 +305,13 @@ pub async fn handle_code(
         orchestrator,
         config.clone(),
         session_store,
+        code_mode,
         plugins,
         checkpoint_manager,
     )?);
     // Override the system prompt with the pure coding agent prompt - no persona bleeding
     let coding_prompt = build_code_system_prompt(&workspace);
-    agent.set_system_prompt_override(coding_prompt).await;
+    agent.set_system_prompt_override(&format!("code:{}", workspace.display()), coding_prompt).await;
 
     // Process initial task if provided
     let initial_task = if task.is_empty() {

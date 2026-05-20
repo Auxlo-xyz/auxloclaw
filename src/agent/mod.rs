@@ -12,6 +12,7 @@ use crate::checkpoints::CheckpointManager;
 use crate::config::AppConfig;
 use crate::context::{build_pruned_messages, truncate_for_summary};
 use crate::memory::{
+    CodeModeStore,
     CompactionResult, Compactor, HistoryMessage, MemoryEngine, Reflection, Reflector,
     ReflectorConfig, SessionHistory, SessionStore,
 };
@@ -46,6 +47,7 @@ pub struct AgentCore {
     usage: std::sync::atomic::AtomicU64,
     pub sessions: RwLock<HashMap<String, SessionHistory>>,
     session_store: Arc<SessionStore>,
+    code_mode: Arc<CodeModeStore>,
     compactor: Arc<Compactor>,
     reflector: Arc<Reflector>,
     plugins: Arc<PluginManager>,
@@ -66,6 +68,7 @@ impl AgentCore {
         orchestrator: Arc<ToolOrchestrator>,
         config: AppConfig,
         session_store: Arc<SessionStore>,
+        code_mode: Arc<CodeModeStore>,
         plugins: Arc<PluginManager>,
         checkpoint_manager: Arc<CheckpointManager>,
     ) -> Result<Self> {
@@ -113,6 +116,7 @@ impl AgentCore {
             usage: std::sync::atomic::AtomicU64::new(0),
             sessions: RwLock::new(HashMap::new()),
             session_store,
+            code_mode,
             compactor,
             reflector,
             plugins,
@@ -137,14 +141,27 @@ impl AgentCore {
     /// Used by /code mode to enforce the coding agent persona.
     /// Set a system prompt override, completely replacing the normal persona.
     /// Used by /code mode to inject the pure coding agent prompt.
-    pub async fn set_system_prompt_override(&self, prompt: String) {
+    pub async fn set_system_prompt_override(&self, session_key: &str, prompt: String) {
+        // Persist to disk so it survives restarts
+        if let Err(e) = self.code_mode.activate(session_key, prompt.clone()) {
+            tracing::warn!("Failed to persist code mode override: {}", e);
+        }
         let mut override_prompt = self.override_system_prompt.write().await;
         *override_prompt = Some(prompt);
     }
 
-    pub async fn clear_system_prompt_override(&self) {
+    pub async fn clear_system_prompt_override(&self, session_key: &str) {
+        // Remove from disk
+        if let Err(e) = self.code_mode.deactivate(session_key) {
+            tracing::warn!("Failed to remove persisted code mode: {}", e);
+        }
         let mut override_prompt = self.override_system_prompt.write().await;
         *override_prompt = None;
+    }
+    
+    /// Check if a session has a persisted code mode override
+    pub fn get_persisted_code_override(&self, session_key: &str) -> Option<String> {
+        self.code_mode.get_override(session_key)
     }
 
     /// Process a message with tool execution loop
@@ -166,7 +183,7 @@ impl AgentCore {
         let history = self.get_history(&session_key).await;
         let reflections = self.get_reflections(&session_key).unwrap_or_else(Vec::new);
 
-        let mut system_prompt = self.build_system_prompt().await;
+        let mut system_prompt = self.build_system_prompt(&session_key).await;
         tracing::debug!("=== SYSTEM PROMPT START (first 500 chars) ===");
         tracing::debug!("{}", &system_prompt[..system_prompt.len().min(500)]);
         tracing::debug!("=== SYSTEM PROMPT END ===");
@@ -462,7 +479,7 @@ impl AgentCore {
         CapabilityManifest::new(&self.config, Some(&self.orchestrator))
     }
 
-    async fn build_system_prompt(&self) -> String {
+    async fn build_system_prompt(&self, session_key: &str) -> String {
         use crate::persona::SystemPromptBuilder;
 
         let tools = self.orchestrator.get_definitions();

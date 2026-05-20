@@ -178,6 +178,7 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
 
     // Initialize persistent session store
     let session_store = Arc::new(memory::SessionStore::new(&session_db)?);
+    let code_mode = Arc::new(memory::CodeModeStore::new(&session_db)?);
     let checkpoint_manager = Arc::new(CheckpointManager::new(&session_db)?);
 
     plugins.run_lifecycle(plugins::HookEvent::Startup).await;
@@ -188,6 +189,7 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
         orchestrator,
         config.clone(),
         session_store,
+        code_mode.clone(),
         plugins.clone(),
         checkpoint_manager.clone(),
     )?);

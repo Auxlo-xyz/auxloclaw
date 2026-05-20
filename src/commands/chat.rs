@@ -29,6 +29,9 @@ pub async fn handle_chat(
     // Initialize session store
     let session_db = shellexpand::tilde(&config.memory.database_path).into_owned();
     let session_store = Arc::new(crate::memory::SessionStore::new(&session_db)?);
+        let code_mode = Arc::new(crate::memory::CodeModeStore::new(
+            &config.memory.database_path
+        )?);
     let checkpoint_manager = Arc::new(CheckpointManager::new(&session_db)?);
 
     let agent = Arc::new(crate::agent::AgentCore::new(
@@ -37,6 +40,7 @@ pub async fn handle_chat(
         orchestrator,
         config.clone(),
         session_store,
+        code_mode,
         plugins.clone(),
         checkpoint_manager.clone(),
     )?);
