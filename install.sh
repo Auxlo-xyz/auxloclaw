@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # AUXLOCLAW Installer
-# Usage: curl -sSL https://install.auxloclaw.sh | bash
+# Usage: curl -sSL https://raw.githubusercontent.com/larsontrey720/auxloclaw/master/install.sh | bash
 # Options:
-#   AUXLOCLAW_VERSION  - specific version tag (default: latest)
-#   AUXLOCLAW_DIR      - install directory (default: /usr/local/bin)
-#   AUXLOCLAW_SKIP_CONFIRM - set to 1 to skip confirmation prompt
+#   AUXLOCLAW_VERSION       - specific version tag (default: latest)
+#   AUXLOCLAW_DIR           - install directory (default: /usr/local/bin)
+#   AUXLOCLAW_SKIP_CONFIRM  - set to 1 to skip confirmation prompt
 
 REPO="larsontrey720/auxloclaw"
 BINARY="auxloclaw"
@@ -20,11 +20,22 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-info()  { echo -e "${CYAN}[info]${NC} $*"; }
-ok()    { echo -e "${GREEN}[ok]${NC} $*"; }
-warn()  { echo -e "${YELLOW}[warn]${NC} $*"; }
+# All output goes to stderr so stdout is clean for return values
+info()  { echo -e "${CYAN}[info]${NC} $*" >&2; }
+ok()    { echo -e "${GREEN}[ok]${NC} $*" >&2; }
+warn()  { echo -e "${YELLOW}[warn]${NC} $*" >&2; }
 err()   { echo -e "${RED}[error]${NC} $*" >&2; }
 die()   { err "$*"; exit 1; }
+
+# Global temp dir -- cleaned up on exit
+TMP_DIR=""
+
+cleanup() {
+    if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
+        rm -rf "$TMP_DIR"
+    fi
+}
+trap cleanup EXIT
 
 detect_arch() {
     local arch
@@ -53,14 +64,12 @@ need_cmd() {
 
 check_deps() {
     need_cmd curl
-    need_cmd tar
 }
 
 get_latest_version() {
     local version
     version="$(curl -sL "${GITHUB_API}/latest" 2>/dev/null | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/')"
     if [ -z "$version" ]; then
-        # No releases yet, fall back to source build
         echo ""
     else
         echo "$version"
@@ -69,45 +78,21 @@ get_latest_version() {
 
 download_binary() {
     local version="$1" os="$2" arch="$3"
-    local url asset_name
+    local url
 
-    if [ "$os" = "macos" ]; then
-        if [ "$arch" = "aarch64" ]; then
-            asset_name="${BINARY}-${version}-aarch64-apple-darwin.tar.gz"
-        else
-            asset_name="${BINARY}-${version}-x86_64-apple-darwin.tar.gz"
-        fi
-    else
-        if [ "$arch" = "aarch64" ]; then
-            asset_name="${BINARY}-${version}-aarch64-unknown-linux-gnu.tar.gz"
-        elif [ "$arch" = "armv7" ]; then
-            asset_name="${BINARY}-${version}-armv7-unknown-linux-gnueabihf.tar.gz"
-        else
-            asset_name="${BINARY}-${version}-x86_64-unknown-linux-gnu.tar.gz"
-        fi
-    fi
+    # The release contains a single raw binary
+    url="https://github.com/${REPO}/releases/download/${version}/${BINARY}"
 
-    url="https://github.com/${REPO}/releases/download/${version}/${asset_name}"
     info "Downloading ${BINARY} ${version} for ${os}/${arch}..."
 
-    local tmp_dir
-    tmp_dir="$(mktemp -d)"
-    trap 'rm -rf "$tmp_dir"' EXIT
-
-    if ! curl -sL --fail "$url" -o "${tmp_dir}/${asset_name}"; then
+    if ! curl -sL --fail "$url" -o "${TMP_DIR}/${BINARY}"; then
+        warn "Download failed (no pre-built binary for ${os}/${arch})"
         return 1
     fi
 
-    tar -xzf "${tmp_dir}/${asset_name}" -C "$tmp_dir"
-    local binary_path
-    binary_path="$(find "$tmp_dir" -name "$BINARY" -type f | head -1)"
-
-    if [ -z "$binary_path" ]; then
-        return 1
-    fi
-
-    chmod +x "$binary_path"
-    echo "$binary_path"
+    chmod +x "${TMP_DIR}/${BINARY}"
+    # Only the path goes to stdout
+    echo "${TMP_DIR}/${BINARY}"
 }
 
 build_from_source() {
@@ -119,33 +104,35 @@ build_from_source() {
     if ! command -v cargo >/dev/null 2>&1; then
         info "Installing Rust toolchain..."
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-        source "$HOME/.cargo/env"
+        export PATH="$HOME/.cargo/bin:$PATH"
     fi
 
-    local tmp_dir
-    tmp_dir="$(mktemp -d)"
-    trap 'rm -rf "$tmp_dir"' EXIT
-
     info "Cloning repository..."
-    git clone --depth 1 "https://github.com/${REPO}.git" "${tmp_dir}/auxloclaw"
+    git clone --depth 1 "https://github.com/${REPO}.git" "${TMP_DIR}/src" 2>&1 | tail -3 >&2
 
     info "Building release binary (this may take a few minutes)..."
     (
-        cd "${tmp_dir}/auxloclaw"
-        cargo build --release 2>&1 | tail -5
+        cd "${TMP_DIR}/src"
+        cargo build --release 2>&1 | tail -5 >&2
     )
 
-    local binary_path="${tmp_dir}/auxloclaw/target/release/${BINARY}"
+    local binary_path="${TMP_DIR}/src/target/release/${BINARY}"
     if [ ! -f "$binary_path" ]; then
         die "Build failed. Binary not found at ${binary_path}"
     fi
 
     chmod +x "$binary_path"
+    # Only the path goes to stdout
     echo "$binary_path"
 }
 
 install_binary() {
     local binary_path="$1"
+
+    if [ ! -f "$binary_path" ]; then
+        die "Binary not found: $binary_path"
+    fi
+
     mkdir -p "$INSTALL_DIR"
     cp "$binary_path" "${INSTALL_DIR}/${BINARY}"
     chmod +x "${INSTALL_DIR}/${BINARY}"
@@ -157,48 +144,42 @@ post_install() {
     if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
         warn "${INSTALL_DIR} is not in your PATH."
         echo ""
-        echo "  Add it to your shell profile:"
-        echo ""
+        echo "  Add it to your shell profile:" >&2
+        echo "" >&2
         if [ -f "$HOME/.zshrc" ]; then
-            echo "    echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ~/.zshrc"
-            echo "    source ~/.zshrc"
+            echo "    echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ~/.zshrc" >&2
+            echo "    source ~/.zshrc" >&2
         elif [ -f "$HOME/.bashrc" ]; then
-            echo "    echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ~/.bashrc"
-            echo "    source ~/.bashrc"
+            echo "    echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ~/.bashrc" >&2
+            echo "    source ~/.bashrc" >&2
         else
-            echo "    export PATH=\"${INSTALL_DIR}:\$PATH\""
+            echo "    export PATH=\"${INSTALL_DIR}:\$PATH\"" >&2
         fi
-        echo ""
+        echo "" >&2
     fi
 
-    echo ""
-    echo -e "${BOLD}Next steps:${NC}"
-    echo ""
-    echo "  1. Run the setup wizard:"
-    echo -e "     ${CYAN}auxloclaw setup${NC}"
-    echo ""
-    echo "  2. Or quick setup with defaults:"
-    echo -e "     ${CYAN}auxloclaw setup --quick${NC}"
-    echo ""
-    echo "  3. Add MCP integrations (GitHub, etc):"
-    echo -e "     ${CYAN}auxloclaw mcp add github${NC}"
-    echo -e "     ${CYAN}auxloclaw token set GITHUB_TOKEN your-token-here${NC}"
-    echo ""
-    echo "  4. Start the gateway:"
-    echo -e "     ${CYAN}auxloclaw gateway${NC}"
-    echo ""
-    echo "  5. Or start a chat:"
-    echo -e "     ${CYAN}auxloclaw chat${NC}"
-    echo ""
-    echo -e "  Docs: ${CYAN}https://github.com/${REPO}${NC}"
-    echo ""
+    echo "" >&2
+    echo -e "${BOLD}Next steps:${NC}" >&2
+    echo "" >&2
+    echo "  1. Run the setup wizard:" >&2
+    echo -e "     ${CYAN}auxloclaw setup${NC}" >&2
+    echo "" >&2
+    echo "  2. Add MCP integrations (GitHub, etc):" >&2
+    echo -e "     ${CYAN}auxloclaw mcp add github${NC}" >&2
+    echo -e "     ${CYAN}auxloclaw token set GITHUB_TOKEN your-token-here${NC}" >&2
+    echo "" >&2
+    echo "  3. Start the gateway:" >&2
+    echo -e "     ${CYAN}auxloclaw gateway${NC}" >&2
+    echo "" >&2
+    echo -e "  Docs: ${CYAN}https://github.com/${REPO}${NC}" >&2
+    echo "" >&2
 }
 
 main() {
-    echo ""
-    echo -e "${BOLD}AUXLOCLAW Installer${NC}"
-    echo -e "  Ultra-High-Performance AI Agent Framework"
-    echo ""
+    echo "" >&2
+    echo -e "${BOLD}AUXLOCLAW Installer${NC}" >&2
+    echo "  Ultra-High-Performance AI Agent Framework" >&2
+    echo "" >&2
 
     check_deps
 
@@ -207,29 +188,44 @@ main() {
     arch="$(detect_arch)"
     info "Detected: ${os}/${arch}"
 
+    # Create global temp dir (cleaned up by trap)
+    TMP_DIR="$(mktemp -d)"
+
     # Check for existing install
     if command -v "$BINARY" >/dev/null 2>&1; then
         local current_version
         current_version="$($BINARY --version 2>/dev/null || echo 'unknown')"
         warn "Existing installation found: ${current_version}"
         if [ "${AUXLOCLAW_SKIP_CONFIRM:-0}" != "1" ]; then
-            read -r -p "  Overwrite? [y/N] " answer
-            case "$answer" in
-                [yY]*) ;;
-                *) info "Cancelled."; exit 0 ;;
-            esac
+            if [ -t 0 ]; then
+                # stdin is a terminal -- safe to prompt
+                read -r -p "  Overwrite? [y/N] " answer </dev/tty
+                case "$answer" in
+                    [yY]*) ;;
+                    *) info "Cancelled."; exit 0 ;;
+                esac
+            else
+                # stdin is a pipe -- default to overwrite
+                warn "Non-interactive mode detected. Overwriting automatically."
+            fi
         fi
     fi
 
     local version
     version="${AUXLOCLAW_VERSION:-$(get_latest_version)}"
 
-    local binary_path=""
-    if [ -n "$version" ]; then
-        binary_path="$(download_binary "$version" "$os" "$arch" 2>/dev/null)" || true
+    if [ -z "$version" ]; then
+        warn "No releases found. Will build from source."
+    else
+        info "Version: ${version}"
     fi
 
-    if [ -z "$binary_path" ]; then
+    local binary_path=""
+    if [ -n "$version" ]; then
+        binary_path="$(download_binary "$version" "$os" "$arch")" || true
+    fi
+
+    if [ -z "$binary_path" ] || [ ! -f "$binary_path" ]; then
         binary_path="$(build_from_source)"
     fi
 
