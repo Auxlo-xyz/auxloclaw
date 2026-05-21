@@ -126,6 +126,24 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", result);
         }
 
+        Commands::Mcp { args } => {
+            let args_str = args.join(" ");
+            let rt = tokio::runtime::Runtime::new()?;
+            match rt.block_on(crate::commands::mcp::handle_mcp(&args_str, None)) {
+                Ok(result) => println!("{}", result),
+                Err(e) => eprintln!("Error: {}", e),
+            }
+        }
+
+        Commands::Token { args } => {
+            let arg_str = args.join(" ");
+            match crate::commands::token::handle_token(&arg_str) {
+                Ok(resp) => println!("{}", resp),
+                Err(e) => eprintln!("Error: {}", e),
+            }
+            return Ok(());
+        }
+
         Commands::Stop => {
             commands::stop::handle_stop()?;
         }
@@ -198,6 +216,8 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     let memory = Arc::new(memory::MemoryEngine::new(&config.memory)?);
     let providers = Arc::new(providers::ProviderPool::new(config.providers.clone()));
     let mut raw_orchestrator = orchestrator::ToolOrchestrator::new();
+    // Register coding workspace tools for /code mode
+    raw_orchestrator.register_code_tools();
     let mut raw_plugins = plugins::PluginManager::new(config.plugins.clone());
     raw_plugins.set_tools(raw_orchestrator.list_tools());
     let plugins = Arc::new(raw_plugins);
@@ -263,12 +283,13 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
 
     // Start Telegram channel if enabled
     let model_store_discord = model_store.clone();
+    let code_mode_discord = code_mode.clone();
     let _discord_handle = if config.channels.discord.enabled {
         let discord_agent = agent.clone();
         let discord_config = config.channels.discord.clone();
         info!("💬 Starting Discord gateway...");
         Some(tokio::spawn(async move {
-            if let Err(e) = channels::discord::start(discord_agent, model_store_discord, Some(discord_config)).await {
+            if let Err(e) = channels::discord::start(discord_agent, model_store_discord, code_mode_discord, Some(discord_config)).await {
                 tracing::error!("Discord error: {}", e);
             }
         }))
@@ -282,7 +303,7 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
         let tg_persona = config.persona.clone();
         info!("📱 Starting Telegram gateway...");
         Some(tokio::spawn(async move {
-            if let Err(e) = channels::telegram::start(tg_agent, model_store.clone(), Some(tg_config), tg_persona).await {
+            if let Err(e) = channels::telegram::start(tg_agent, model_store.clone(), code_mode.clone(), Some(tg_config), tg_persona).await {
                 tracing::error!("Telegram error: {}", e);
             }
         }))

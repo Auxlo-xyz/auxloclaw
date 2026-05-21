@@ -303,7 +303,8 @@ impl LLMProvider for OpenAICompatibleProvider {
             request.model.clone()
         };
 
-        let mut url = format!("{}/chat/completions", self.api_base);
+        let base = self.api_base.trim_end_matches('/');
+        let mut url = format!("{}/chat/completions", base);
 
         // Google AI Studio requires key as query param
         if self.provider_type == "google" && !self.api_key.is_empty() {
@@ -333,49 +334,81 @@ impl LLMProvider for OpenAICompatibleProvider {
         req.model = model_name.to_string();
         let body = serde_json::to_value(&req)?;
 
+        let msg_count = req.messages.len();
+        let tool_count = req.tools.as_ref().map(|t| t.len()).unwrap_or(0);
+        let payload_bytes = body.to_string().len();
+        tracing::info!(
+            "Provider {} request: {} messages, {} tools, {} bytes payload -> {}",
+            self.name, msg_count, tool_count, payload_bytes, url
+        );
+
         let response = self
             .client
             .post(&url)
             .headers(headers)
             .json(&body)
             .send()
-            .await?;
+            .await
+            .map_err(|e| {
+                tracing::error!("Provider {} connection/send error: {:#}", self.name, e);
+                e
+            })?;
 
         let status = response.status();
-        tracing::debug!("Provider {} response status: {}", self.name, status);
+        tracing::info!("Provider {} response status: {}", self.name, status);
+
+        let response_body = response.text().await.map_err(|e| {
+            tracing::error!("Provider {} failed to read response body: {:#}", self.name, e);
+            e
+        })?;
 
         if !status.is_success() {
-            let error = response.text().await?;
+            tracing::error!(
+                "Provider {} HTTP {} error. Full response body:\n{}",
+                self.name, status, response_body
+            );
             if capture_provider_rejections_enabled() {
-                match capture_rejected_request(&self.name, status.as_u16(), &error, &body) {
+                match capture_rejected_request(&self.name, status.as_u16(), &response_body, &body) {
                     Ok(path) => tracing::error!(
-                        "Provider {} API error: {}; exact rejected request captured at {}",
+                        "Provider {} rejected request captured at {}",
                         self.name,
-                        error,
                         path.display()
                     ),
                     Err(capture_error) => tracing::error!(
-                        "Provider {} API error: {}; failed to capture rejected request: {}",
+                        "Provider {} failed to capture rejected request: {}",
                         self.name,
-                        error,
                         capture_error
                     ),
                 }
-            } else {
-                tracing::error!("Provider {} API error: {}", self.name, error);
             }
-            return Err(anyhow!("API error: {}", error));
+            return Err(anyhow!("Provider {} HTTP {}: {}", self.name, status, response_body));
         }
 
-        let completion: OpenAICompletion = response.json().await?;
+        let completion: OpenAICompletion = match serde_json::from_str(&response_body) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!(
+                    "Provider {} JSON parse error: {:#}\nFull response body:\n{}",
+                    self.name, e, response_body
+                );
+                return Err(anyhow!("Provider {} JSON parse error: {:#}", self.name, e));
+            }
+        };
 
-        // Check for Google error in response
-        if let Some(err) = completion.error {
+        if let Some(err) = &completion.error {
             let err_msg = err
                 .get("message")
                 .and_then(|m| m.as_str())
                 .unwrap_or("Unknown error");
-            return Err(anyhow!("API error: {}", err_msg));
+            let err_code = err.get("code").and_then(|c| c.as_str()).unwrap_or("none");
+            let err_status = err.get("status").and_then(|s| s.as_str()).unwrap_or("none");
+            tracing::error!(
+                "Provider {} returned error in response body: code={} status={} message={}\nFull error object: {}",
+                self.name, err_code, err_status, err_msg,
+                serde_json::to_string(err).unwrap_or_default()
+            );
+            return Err(anyhow!("Provider {} error (code={}, status={}): {}",
+                self.name, err_code, err_status, err_msg));
         }
 
         let content = completion
@@ -390,6 +423,20 @@ impl LLMProvider for OpenAICompatibleProvider {
                     .unwrap_or_default()
             })
             .unwrap_or_default();
+
+        if completion.choices.is_empty() {
+            tracing::error!(
+                "Provider {} returned empty choices array. Usage: {:?}\nRaw response: {}",
+                self.name, completion.usage, response_body
+            );
+        }
+
+        if let Some(ref usage) = completion.usage {
+            tracing::info!(
+                "Provider {} completion: prompt_tokens={} completion_tokens={} total_tokens={}",
+                self.name, usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
+            );
+        }
 
         Ok(CompletionResponse {
             content,
@@ -408,7 +455,8 @@ impl LLMProvider for OpenAICompatibleProvider {
     async fn stream(&self, request: CompletionRequest) -> Result<mpsc::Receiver<StreamChunk>> {
         let (tx, rx) = mpsc::channel(100);
 
-        let url = format!("{}/chat/completions", self.api_base);
+        let base = self.api_base.trim_end_matches('/');
+        let url = format!("{}/chat/completions", base);
         let mut stream_request = request;
         stream_request.stream = Some(true);
 
@@ -559,9 +607,50 @@ pub struct CompletionRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
-    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl Message {
+    pub fn new(role: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: role.into(),
+            content: Some(content.into()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }
+    }
+
+    pub fn with_tool_calls(role: impl Into<String>, tool_calls: Vec<ToolCall>) -> Self {
+        Self {
+            role: role.into(),
+            content: None,
+            tool_calls: Some(tool_calls),
+            tool_call_id: None,
+            name: None,
+        }
+    }
+
+    pub fn tool_result(
+        tool_call_id: impl Into<String>,
+        name: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        Self {
+            role: "tool".into(),
+            content: Some(content.into()),
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.into()),
+            name: Some(name.into()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

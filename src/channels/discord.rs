@@ -4,7 +4,6 @@ use serenity::async_trait;
 use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
 use serenity::prelude::*;
-use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{error, info};
@@ -12,15 +11,15 @@ use tracing::{error, info};
 pub struct DiscordHandler {
     agent: Arc<crate::agent::AgentCore>,
     model_store: Arc<crate::memory::model_store::ModelStore>,
-    coding_users: Arc<RwLock<HashSet<u64>>>,
+    code_mode: Arc<crate::memory::CodeModeStore>,
 }
 
 impl DiscordHandler {
-    pub fn new(agent: Arc<crate::agent::AgentCore>, model_store: Arc<crate::memory::model_store::ModelStore>) -> Self {
+    pub fn new(agent: Arc<crate::agent::AgentCore>, model_store: Arc<crate::memory::model_store::ModelStore>, code_mode: Arc<crate::memory::CodeModeStore>) -> Self {
         Self {
             agent,
             model_store,
-            coding_users: Arc::new(RwLock::new(HashSet::new())),
+            code_mode,
         }
     }
 }
@@ -58,7 +57,7 @@ impl EventHandler for DiscordHandler {
             let http = ctx.http;
 
             let content_clone = content.clone();
-            let coding_users = self.coding_users.clone();
+            let code_mode = self.code_mode.clone();
             tokio::spawn(async move {
                 // Check for /code command
                 if content_clone.trim().starts_with("/code") {
@@ -71,8 +70,7 @@ impl EventHandler for DiscordHandler {
                     let _ = crate::commands::code::init_workspace(&workspace);
                     let code_prompt = crate::commands::code::build_code_system_prompt(&workspace);
                     agent.set_session_context("discord", &format!("{}", msg.author.id.get())).await;
-                    agent.set_system_prompt_override(&format!("dc:{}", msg.author.id.get()), code_prompt).await;
-                    coding_users.write().await.insert(user_id.get());
+                    agent.set_system_prompt_override(&format!("dc-code-{}", msg.author.id.get()), code_prompt).await;
                     let response = format!(
                         "Coding mode activated.\nWorkspace: {}\n\nSend your coding task as the next message. Use /normal to exit coding mode.",
                         workspace.display()
@@ -85,8 +83,7 @@ impl EventHandler for DiscordHandler {
 
                 // Check for /normal to exit code mode
                 if content_clone.trim() == "/normal" {
-                    coding_users.write().await.remove(&user_id.get());
-                    agent.clear_system_prompt_override(&format!("dc:{}", msg.author.id.get())).await;
+                    agent.clear_system_prompt_override(&format!("dc-code-{}", msg.author.id.get())).await;
                     if let Err(e) = msg_channel.say(&http, "Exited coding mode. Back to normal.").await {
                         error!("Failed to send Discord message: {}", e);
                     }
@@ -102,8 +99,50 @@ impl EventHandler for DiscordHandler {
                     return;
                 }
 
+                // Check for /mcp command
+                if content_clone.trim().starts_with("/mcp") {
+                    let args = content_clone.trim().strip_prefix("/mcp").unwrap_or("").trim();
+                    match crate::commands::mcp::handle_mcp(args, Some(&agent)).await {
+                        Ok(resp) => {
+                            if let Err(e) = msg_channel.say(&http, &resp).await {
+                                error!("Failed to send MCP response: {}", e);
+                            }
+                        }
+                        Err(e) => {
+                            if let Err(e) = msg_channel.say(&http, format!("Error: {}", e)).await {
+                                error!("Failed to send MCP error: {}", e);
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                // Check for /token command + auto-delete secrets
+                if content_clone.trim().starts_with("/token") {
+                    // Delete the original message if it contains a secret
+                    if crate::commands::token::contains_secret(&content_clone) {
+                        let _ = msg.delete(&http).await;
+                    }
+                    let args = content_clone.trim().strip_prefix("/token").unwrap_or("").trim();
+                    let response = crate::commands::token::handle_token(args)
+                        .unwrap_or_else(|e| format!("Error: {}", e));
+                    if let Err(e) = msg_channel.say(&http, &response).await {
+                        error!("Failed to send token response: {}", e);
+                    }
+                    return;
+                }
+
+                // Auto-delete messages containing secrets
+                if crate::commands::token::contains_secret(&content_clone) {
+                    let _ = msg.delete(&http).await;
+                    if let Err(e) = msg_channel.say(&http, "Your message was deleted for security (it contained a token/secret). Use `/token set <server> <KEY> <value>` to store tokens safely.").await {
+                        error!("Failed to send security warning: {}", e);
+                    }
+                    return;
+                }
+
                 // Route through code session if in code mode
-                let is_coding = coding_users.read().await.contains(&user_id.get());
+                let is_coding = code_mode.get_override(&format!("dc-code-{}", user_id.get())).is_some();
                 let session_id = if is_coding {
                     Some(format!("discord-code-{}", user_id))
                 } else {
@@ -126,6 +165,7 @@ impl EventHandler for DiscordHandler {
 pub async fn start(
     agent: Arc<crate::agent::AgentCore>,
     model_store: Arc<crate::memory::model_store::ModelStore>,
+    code_mode: Arc<crate::memory::CodeModeStore>,
     config: Option<crate::config::DiscordConfig>,
 ) -> Result<()> {
     if let Some(config) = config {
@@ -138,7 +178,7 @@ pub async fn start(
                 | GatewayIntents::GUILD_MEMBERS;
 
             let mut client = Client::builder(&config.token, intents)
-                .event_handler(DiscordHandler::new(agent, model_store))
+                .event_handler(DiscordHandler::new(agent, model_store, code_mode))
                 .await
                 .map_err(|e| anyhow::anyhow!("Discord client builder error: {}", e))?;
 

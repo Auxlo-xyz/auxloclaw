@@ -52,6 +52,10 @@ pub enum Command {
     Normal,
     #[command(description = "Override model/provider settings")]
     Model(String),
+    #[command(description = "Manage MCP server integrations")]
+    Mcp(String),
+    #[command(description = "Manage API tokens for MCP servers")]
+    Token(String),
 }
 
 
@@ -110,18 +114,17 @@ pub struct TelegramState {
     agent: Arc<AgentCore>,
     model_store: Arc<crate::memory::model_store::ModelStore>,
     sessions: RwLock<HashMap<i64, SessionState>>,
-    /// Tracks chats that are in /code mode: chat_id -> workspace_path
-    coding_chats: RwLock<HashMap<i64, String>>,
+    code_mode: Arc<crate::memory::CodeModeStore>,
     config: TelegramConfig,
 }
 
 impl TelegramState {
-    pub fn new(agent: Arc<AgentCore>, model_store: Arc<crate::memory::model_store::ModelStore>, config: TelegramConfig) -> Self {
+    pub fn new(agent: Arc<AgentCore>, model_store: Arc<crate::memory::model_store::ModelStore>, code_mode: Arc<crate::memory::CodeModeStore>, config: TelegramConfig) -> Self {
         Self {
             agent,
             model_store,
             sessions: RwLock::new(HashMap::new()),
-            coding_chats: RwLock::new(HashMap::new()),
+            code_mode,
             config,
         }
     }
@@ -152,15 +155,16 @@ impl TelegramState {
     }
 
     async fn is_coding(&self, chat_id: i64) -> bool {
-        self.coding_chats.read().await.contains_key(&chat_id)
+        let session_key = format!("tg-code-{}", chat_id);
+        self.code_mode.get_override(&session_key).is_some()
     }
 
-    async fn enter_code_mode(&self, chat_id: i64, workspace: String) {
-        self.coding_chats.write().await.insert(chat_id, workspace);
+    async fn enter_code_mode(&self, _chat_id: i64, _workspace: String) {
+        // Code mode activation is handled by agent.set_system_prompt_override which persists to CodeModeStore
     }
 
-    async fn exit_code_mode(&self, chat_id: i64) {
-        self.coding_chats.write().await.remove(&chat_id);
+    async fn exit_code_mode(&self, _chat_id: i64) {
+        // Code mode deactivation is handled by agent.clear_system_prompt_override which removes from CodeModeStore
     }
 
     async fn clear_session(&self, chat_id: i64) {
@@ -179,6 +183,7 @@ impl TelegramState {
 pub async fn start(
     agent: Arc<AgentCore>,
     model_store: Arc<crate::memory::model_store::ModelStore>,
+    code_mode: Arc<crate::memory::CodeModeStore>,
     config: Option<TelegramConfig>,
     _persona: crate::persona::PersonaConfig,
 ) -> Result<()> {
@@ -189,7 +194,7 @@ pub async fn start(
     }
 
     let bot = Bot::new(config.token.clone());
-    let state = Arc::new(TelegramState::new(agent, model_store, config));
+    let state = Arc::new(TelegramState::new(agent, model_store, code_mode, config));
 
     let commands = vec![
         teloxide::types::BotCommand { command: "memory".into(), description: "View agent memory".into() },
@@ -206,6 +211,8 @@ pub async fn start(
         teloxide::types::BotCommand { command: "code".into(), description: "Start a coding session in isolated workspace".into() },
         teloxide::types::BotCommand { command: "normal".into(), description: "Exit coding mode and return to normal persona".into() },
         teloxide::types::BotCommand { command: "model".into(), description: "Override model/provider settings".into() },
+        teloxide::types::BotCommand { command: "mcp".into(), description: "Manage MCP server integrations".into() },
+        teloxide::types::BotCommand { command: "token".into(), description: "Manage API tokens".into() },
     ];
     let _ = bot.set_my_commands(commands).await;
 
@@ -363,7 +370,7 @@ async fn handle_command(
             let _ = crate::commands::code::init_workspace(&workspace);
             let code_prompt = crate::commands::code::build_code_system_prompt(&workspace);
             state.agent.set_session_context("telegram", &format!("{}", chat_id)).await;
-            state.agent.set_system_prompt_override(&format!("tg:{}", chat_id), code_prompt).await;
+            state.agent.set_system_prompt_override(&format!("tg-code-{}", chat_id), code_prompt).await;
             state.enter_code_mode(chat_id, workspace.display().to_string()).await;
             format!(
                 "Coding mode activated.\nWorkspace: {}\n\nSend your coding task as the next message. Use /normal to exit coding mode.",
@@ -384,9 +391,28 @@ async fn handle_command(
             send_markdown_message(&bot, chat_id, &response).await?;
             return Ok(());
         }
+        Command::Mcp(args) => {
+            let response = crate::commands::mcp::handle_mcp(&args, Some(&state.agent))
+                .await
+                .unwrap_or_else(|e| format!("Error: {}", e));
+            send_markdown_message(&bot, chat_id, &response).await?;
+            return Ok(());
+        }
+        Command::Token(args) => {
+            // Check if the original message contains a secret - delete it
+            if let Some(text) = msg.text() {
+                if crate::commands::token::contains_secret(text) {
+                    // Best-effort delete - don't fail the command if delete fails
+                    let _ = bot.delete_message(teloxide::types::ChatId(chat_id), msg.id).await;
+                }
+            }
+            let response = crate::commands::token::handle_token(&args)
+                .unwrap_or_else(|e| format!("Error: {}", e));
+            send_markdown_message(&bot, chat_id, &response).await?;
+            return Ok(());
+        }
         Command::Normal => {
-            state.exit_code_mode(chat_id).await;
-            state.agent.clear_system_prompt_override(&format!("tg:{}", chat_id)).await;
+            state.agent.clear_system_prompt_override(&format!("tg-code-{}", chat_id)).await;
             "Exited coding mode. Back to normal.".to_string()
         }
         Command::New => {
@@ -407,6 +433,14 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
     if text.is_empty() {
         return Ok(());
     }
+
+    // Auto-delete messages containing secrets
+    if crate::commands::token::contains_secret(text) {
+        let _ = bot.delete_message(teloxide::types::ChatId(chat_id), msg.id).await;
+        send_markdown_message(&bot, chat_id, "Your message was deleted for security (it contained a token/secret). Use `/token set <server> <KEY> <value>` to store tokens safely.").await?;
+        return Ok(());
+    }
+
     if text.trim_start().starts_with("/persona") {
         let response = handle_persona_command_text(text);
         send_markdown_message(&bot, chat_id, &response).await?;
@@ -450,12 +484,22 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
 async fn send_markdown_message(bot: &Bot, chat_id: i64, text: &str) -> ResponseResult<()> {
     for chunk in split_telegram_message(text, 3900) {
         let formatted = markdown_to_telegram(&chunk);
-        bot.send_message(ChatId(chat_id), formatted)
+        let send_result = bot.send_message(ChatId(chat_id), &formatted)
             .parse_mode(teloxide::types::ParseMode::MarkdownV2)
-            .await?;
+            .await;
+        if let Err(err) = send_result {
+            tracing::warn!("MarkdownV2 send failed ({err:?}), retrying as plain text");
+            let plain = strip_all_formatting(&chunk);
+            bot.send_message(ChatId(chat_id), plain)
+                .await?;
+        }
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
     Ok(())
+}
+
+fn strip_all_formatting(text: &str) -> String {
+    text.to_string()
 }
 
 fn split_telegram_message(text: &str, max_chars: usize) -> Vec<String> {

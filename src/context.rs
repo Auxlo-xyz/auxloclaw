@@ -73,33 +73,20 @@ pub fn build_pruned_messages(
     let split_at = history.len().saturating_sub(keep_messages);
     let (older, recent) = history.split_at(split_at);
 
-    let mut messages = vec![Message {
-        role: "system".into(),
-        content: system_prompt,
-        tool_calls: None,
-    }];
+    let mut messages = vec![Message::new("system", system_prompt)];
 
     if let Some(summary) = summarize_older_history(older) {
-        messages.push(Message {
-            role: "system".into(),
-            content: summary,
-            tool_calls: None,
-        });
+        messages.push(Message::new("system", summary));
     }
 
     for m in recent {
-        messages.push(Message {
-            role: m.role.clone(),
-            content: truncate_for_summary(&m.content, MAX_SUMMARY_CHARS),
-            tool_calls: None,
-        });
+        messages.push(Message::new(
+            &m.role,
+            truncate_for_summary(&m.content, MAX_SUMMARY_CHARS),
+        ));
     }
 
-    messages.push(Message {
-        role: "user".into(),
-        content: user_message,
-        tool_calls: None,
-    });
+    messages.push(Message::new("user", user_message));
 
     trim_to_token_budget(messages, context_window_tokens as usize)
 }
@@ -123,7 +110,11 @@ fn trim_to_token_budget(mut messages: Vec<Message>, max_tokens: usize) -> Vec<Me
 fn estimate_message_tokens(messages: &[Message]) -> usize {
     messages
         .iter()
-        .map(|m| estimate_tokens(&m.role) + estimate_tokens(&m.content) + 4)
+        .map(|m| {
+            estimate_tokens(&m.role)
+                + estimate_tokens(m.content.as_deref().unwrap_or(""))
+                + 4
+        })
         .sum()
 }
 
@@ -149,7 +140,7 @@ mod tests {
         let messages = build_pruned_messages("sys".into(), &h, "now".into(), 10, 50_000);
         let joined = messages
             .iter()
-            .map(|m| m.content.as_str())
+            .map(|m| m.content.as_deref().unwrap_or(""))
             .collect::<Vec<_>>()
             .join("\n");
         assert!(joined.contains("Original older message count: 10"));

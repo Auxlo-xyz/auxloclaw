@@ -234,7 +234,11 @@ impl AgentCore {
                 break;
             }
 
-            let request = self.build_request(messages.clone());
+            let code_only = {
+                let lock = self.override_system_prompt.read().await;
+                lock.is_some()
+            };
+            let request = self.build_request(messages.clone(), code_only);
 
             match self.providers.complete(request).await {
                 Ok(response) => {
@@ -252,11 +256,7 @@ impl AgentCore {
                             tracing::debug!("Model returned {} tool_calls", tool_calls.len());
 
                             // Add assistant message with tool calls
-                            messages.push(Message {
-                                role: "assistant".into(),
-                                content: String::new(),
-                                tool_calls: Some(tool_calls.clone()),
-                            });
+                            messages.push(Message::with_tool_calls("assistant", tool_calls.clone()));
 
                             // Execute each tool
                             for tool_call in tool_calls {
@@ -276,11 +276,11 @@ impl AgentCore {
                                 });
 
                                 // Add tool result as a message
-                                messages.push(Message {
-                                    role: "tool".into(),
-                                    content: result.clone(),
-                                    tool_calls: None,
-                                });
+                                messages.push(Message::tool_result(
+                                    &tool_call.id,
+                                    &tool_call.function.name,
+                                    &result,
+                                ));
                             }
 
                             tracing::debug!("Continuing loop with {} messages", messages.len());
@@ -464,8 +464,8 @@ impl AgentCore {
         None
     }
 
-    fn build_request(&self, messages: Vec<Message>) -> CompletionRequest {
-        let tools: Vec<crate::providers::ToolDefinition> = self
+    fn build_request(&self, messages: Vec<Message>, code_only: bool) -> CompletionRequest {
+        let all_tools: Vec<crate::providers::ToolDefinition> = self
             .orchestrator
             .get_definitions()
             .into_iter()
@@ -478,6 +478,28 @@ impl AgentCore {
                 },
             })
             .collect();
+
+        let tools: Vec<crate::providers::ToolDefinition> = if code_only {
+            all_tools
+                .into_iter()
+                .filter(|t| {
+                    matches!(
+                        t.function.name.as_str(),
+                        "read_file"
+                            | "list_files"
+                            | "edit_file"
+                            | "edit_file_llm"
+                            | "create_or_rewrite_file"
+                            | "run_bash_command"
+                            | "run_sequential_cmds"
+                            | "run_parallel_cmds"
+                            | "grep_search"
+                    )
+                })
+                .collect()
+        } else {
+            all_tools
+        };
 
         // Resolve per-user model override (model name, base_url, api_key)
         let (effective_model, user_base_url, user_api_key) = {
@@ -524,13 +546,21 @@ impl AgentCore {
 
         let tools = self.orchestrator.get_definitions();
         let capability_summary = self.capability_manifest().prompt_summary();
+        let mcp_summaries = self.orchestrator.mcp_summaries();
 
         // Check if there's an override system prompt (e.g., /code mode)
         {
             let override_lock = self.override_system_prompt.read().await;
             if let Some(ref override_prompt) = *override_lock {
                 tracing::info!("[build_system_prompt] OVERRIDE active - bypassing persona, using custom prompt ({} chars)", override_prompt.len());
-                return format!("{}\n\n{}", override_prompt, capability_summary);
+                let mut prompt = format!("{}\n\n{}", override_prompt, capability_summary);
+                if !mcp_summaries.is_empty() {
+                    prompt.push_str("\n\n## Connected Integrations (MCP)\n");
+                    for s in &mcp_summaries {
+                        prompt.push_str(&format!("- {}\n", s));
+                    }
+                }
+                return prompt;
             }
         }
 
@@ -548,7 +578,14 @@ impl AgentCore {
             .with_skills(&[])
             .build();
 
-        format!("{}\n\n{}", base_prompt, capability_summary)
+        let mut prompt = format!("{}\n\n{}", base_prompt, capability_summary);
+        if !mcp_summaries.is_empty() {
+            prompt.push_str("\n\n## Connected Integrations (MCP)\n");
+            for s in &mcp_summaries {
+                prompt.push_str(&format!("- {}\n", s));
+            }
+        }
+        prompt
     }
 
     pub async fn memory_summary(&self) -> String {
@@ -743,5 +780,30 @@ impl AgentCore {
         let mut sessions = self.sessions.write().await;
         sessions.insert(session_id.to_string(), history);
         Ok(())
+    }
+
+    /// Hot-reload MCP integrations from config on disk.
+    /// Returns a user-friendly summary of what was loaded.
+    pub async fn reload_mcp(&self) -> String {
+        match self.orchestrator.reload_mcp().await {
+            Ok((count, summaries)) => {
+                if count == 0 {
+                    "MCP reload complete. No tools loaded (check config).".to_string()
+                } else {
+                    let mut msg = format!("MCP reload complete: {} tools loaded.\n", count);
+                    for s in &summaries {
+                        msg.push_str(&format!("- {}\n", s));
+                    }
+                    msg
+                }
+            }
+            Err(e) => format!("MCP reload failed: {}", e),
+        }
+    }
+
+    /// List MCP tool names for a given server name
+    pub fn mcp_tools_for(&self, server_name: &str) -> Vec<String> {
+        let prefix = format!("mcp_{}_", server_name);
+        self.orchestrator.tools_with_prefix(&prefix)
     }
 }

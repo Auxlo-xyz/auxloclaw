@@ -15,6 +15,8 @@ pub mod skill;
 pub mod status;
 pub mod stop;
 pub mod update;
+pub mod mcp;
+pub mod token;
 
 pub use capabilities::handle_capabilities;
 pub use chat::handle_chat;
@@ -29,3 +31,4 @@ pub use setup::handle_setup;
 pub use skill::handle_skill;
 pub use status::handle_status;
 pub use stop::handle_stop;
+pub use mcp::handle_mcp;

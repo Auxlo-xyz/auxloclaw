@@ -141,6 +141,18 @@ pub enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Manage MCP server integrations
+    Mcp {
+        /// Subcommand: list, add, remove, enable, disable, tools, help
+        #[arg(trailing_var_arg = true)]
+        args: Vec<String>,
+    },
+    /// Manage API tokens for MCP servers
+    Token {
+        /// Token subcommand and args (e.g. "set github KEY value")
+        #[arg(trailing_var_arg = true)]
+        args: Vec<String>,
+    },
     /// Update auxloclaw to the latest version
     Update,
     /// Stop the gateway server

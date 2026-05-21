@@ -5,6 +5,88 @@
 
 /// Convert common markdown to Telegram MarkdownV2 format.
 pub fn markdown_to_telegram(text: &str) -> String {
+    let raw = convert_inner(text);
+    if markers_are_balanced(&raw) {
+        raw
+    } else {
+        // Strip all formatting markers and return escaped plain text
+        escape_markdown_v2(text)
+    }
+}
+
+fn markers_are_balanced(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    for marker in ['_', '*', '~'] {
+        let mut count = 0;
+        let mut j = 0;
+        while j < chars.len() {
+            // Skip escaped chars
+            if chars[j] == '\\' && j + 1 < chars.len() {
+                j += 2;
+                continue;
+            }
+            // Skip triple-backtick code blocks
+            if chars[j] == '`' && j + 2 < chars.len() && chars[j+1] == '`' && chars[j+2] == '`' {
+                j += 3;
+                while j + 2 < chars.len() && !(chars[j] == '`' && chars[j+1] == '`' && chars[j+2] == '`') {
+                    j += 1;
+                }
+                if j + 2 < chars.len() { j += 3; }
+                continue;
+            }
+            // Skip inline code
+            if chars[j] == '`' {
+                j += 1;
+                while j < chars.len() && chars[j] != '`' {
+                    j += 1;
+                }
+                if j < chars.len() { j += 1; }
+                continue;
+            }
+            // Skip link structure [text](url) - don't count markers inside
+            if chars[j] == '[' {
+                // Find closing ]
+                let mut depth = 0;
+                let start = j;
+                j += 1;
+                while j < chars.len() && chars[j] != ']' {
+                    j += 1;
+                }
+                if j < chars.len() { j += 1; } // skip ]
+                // Check for (
+                if j < chars.len() && chars[j] == '(' {
+                    j += 1;
+                    // Find matching ) accounting for escaped \)
+                    let mut paren_depth = 1;
+                    while j < chars.len() && paren_depth > 0 {
+                        if chars[j] == '\\' && j + 1 < chars.len() {
+                            j += 2;
+                            continue;
+                        }
+                        if chars[j] == '(' { paren_depth += 1; }
+                        if chars[j] == ')' { paren_depth -= 1; }
+                        if paren_depth > 0 { j += 1; }
+                    }
+                    if j < chars.len() { j += 1; } // skip )
+                } else {
+                    // Not a link, go back and count the [ if it's the marker
+                    // Actually [ isn't one of our markers, just skip it
+                }
+                continue;
+            }
+            if chars[j] == marker {
+                count += 1;
+            }
+            j += 1;
+        }
+        if count % 2 != 0 {
+            return false;
+        }
+    }
+    true
+}
+
+fn convert_inner(text: &str) -> String {
     let mut out = String::with_capacity(text.len() * 2);
     let mut i = 0;
 

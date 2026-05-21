@@ -6,7 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 
 pub fn handle_setup(quick: bool, telegram: bool, discord: bool) -> Result<()> {
-    println!("\n🦞 AUXLOCLAW Setup Wizard\n");
+    println!("\nAUXLOCLAW Setup Wizard\n");
     
     let config_dir = dirs::home_dir()
         .map(|h| h.join(".auxloclaw"))
@@ -26,7 +26,7 @@ pub fn handle_setup(quick: bool, telegram: bool, discord: bool) -> Result<()> {
         fs::create_dir_all(&config_dir)?;
         fs::create_dir_all(config_dir.join("skills"))?;
         fs::create_dir_all(config_dir.join("memory"))?;
-        println!("✓ Created config directory: {:?}", config_dir);
+        println!("Created config directory: {:?}", config_dir);
     }
     
     // Agent name
@@ -109,6 +109,70 @@ pub fn handle_setup(quick: bool, telegram: bool, discord: bool) -> Result<()> {
         None
     };
     
+    // MCP Integrations
+    let enable_github_mcp = Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Enable GitHub integration (MCP)?")
+        .default(false)
+        .interact()?;
+    
+    let github_token = if enable_github_mcp {
+        println!("  To create a token: GitHub Settings > Developer settings > Personal access tokens");
+        println!("  Required scopes: repo, read:org, read:user\n");
+        let token: String = Input::with_theme(&ColorfulTheme::default())
+            .with_prompt("GitHub Personal Access Token")
+            .interact_text()?;
+        Some(token)
+    } else {
+        None
+    };
+    
+    // Extra MCP servers
+    let mut extra_mcp_servers: Vec<(String, String, Vec<String>)> = Vec::new();
+    if !enable_github_mcp {
+        let add_more_mcp = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Add other MCP servers? (You can also use /mcp add later)")
+            .default(false)
+            .interact()?;
+        
+        if add_more_mcp {
+            loop {
+                println!("\nAdd MCP server (leave name empty to finish):");
+                let name: String = Input::with_theme(&ColorfulTheme::default())
+                    .with_prompt("  Server name (e.g. filesystem, slack)")
+                    .allow_empty(true)
+                    .interact_text()?;
+                
+                if name.is_empty() {
+                    break;
+                }
+                
+                let command: String = Input::with_theme(&ColorfulTheme::default())
+                    .with_prompt("  Command (e.g. npx -y @modelcontextprotocol/server-filesystem)")
+                    .interact_text()?;
+                
+                let args_str: String = Input::with_theme(&ColorfulTheme::default())
+                    .with_prompt("  Arguments (space-separated, e.g. /home/workspace)")
+                    .allow_empty(true)
+                    .interact_text()?;
+                
+                let args: Vec<String> = if args_str.is_empty() {
+                    Vec::new()
+                } else {
+                    args_str.split_whitespace().map(String::from).collect()
+                };
+                
+                extra_mcp_servers.push((name, command, args));
+            }
+        }
+    }
+    
+    // Token management
+    if github_token.is_none() {
+        println!("\nYou can set tokens later with:");
+        println!("  auxloclaw token set GITHUB_TOKEN <your-token>");
+        println!("  Or use /token set GITHUB_TOKEN <your-token> in Telegram/Discord\n");
+    }
+    
     // Generate config
     let config = generate_config(
         &agent_name,
@@ -119,13 +183,27 @@ pub fn handle_setup(quick: bool, telegram: bool, discord: bool) -> Result<()> {
         temperature,
         telegram_token.as_deref(),
         discord_token.as_deref(),
+        github_token.as_deref(),
+        &extra_mcp_servers,
     );
     
     fs::write(&config_path, &config)?;
-    println!("\n✓ Configuration saved to {:?}", config_path);
+    println!("\nConfiguration saved to {:?}", config_path);
+    
+    // Save token store
+    if github_token.is_some() {
+        let token_dir = config_dir.join("tokens.json");
+        let mut tokens = serde_json::Map::new();
+        if let Some(ref t) = github_token {
+            tokens.insert("GITHUB_TOKEN".to_string(), serde_json::Value::String(t.clone()));
+        }
+        let token_json = serde_json::to_string_pretty(&tokens)?;
+        fs::write(&token_dir, token_json)?;
+        println!("Tokens saved to {:?}", token_dir);
+    }
     
     // Summary
-    println!("\n📋 Summary:");
+    println!("\nSummary:");
     println!("  Agent: {}", agent_name);
     println!("  Provider: {} ({})", provider_name, model);
     println!("  Temperature: {}", temperature);
@@ -135,8 +213,14 @@ pub fn handle_setup(quick: bool, telegram: bool, discord: bool) -> Result<()> {
     if enable_discord {
         println!("  Discord: enabled");
     }
+    if enable_github_mcp {
+        println!("  GitHub MCP: enabled (26 tools)");
+    }
+    if !extra_mcp_servers.is_empty() {
+        println!("  Extra MCP servers: {}", extra_mcp_servers.len());
+    }
     
-    println!("\n✅ Setup complete! Run `auxloclaw gateway` to start.");
+    println!("\nSetup complete! Run `auxloclaw gateway` to start.");
     
     Ok(())
 }
@@ -157,12 +241,14 @@ fn quick_setup(config_dir: &PathBuf, telegram: bool, discord: bool) -> Result<()
         1.0,
         if telegram { Some("") } else { None },
         if discord { Some("") } else { None },
+        None,
+        &[],
     );
     
     let config_path = config_dir.join("config.toml");
     fs::write(&config_path, &config)?;
     
-    println!("✓ Quick setup complete: {:?}", config_path);
+    println!("Quick setup complete: {:?}", config_path);
     println!("  Set your API key: export NVIDIA_API_KEY=your-key");
     println!("  Run: auxloclaw gateway");
     
@@ -178,8 +264,10 @@ fn generate_config(
     temperature: f32,
     telegram_token: Option<&str>,
     discord_token: Option<&str>,
+    github_token: Option<&str>,
+    extra_mcp: &[(String, String, Vec<String>)],
 ) -> String {
-    format!(r#"# AUXLOCLAW Configuration
+    let mut config = format!(r#"# AUXLOCLAW Configuration
 
 [agent]
 name = "{}"
@@ -234,6 +322,9 @@ web_search_provider = "brave"
 host = "0.0.0.0"
 port = 18789
 cors_enabled = true
+
+[mcp]
+enabled = true
 "#,
         agent_name,
         model,
@@ -245,5 +336,35 @@ cors_enabled = true
         telegram_token.unwrap_or(""),
         discord_token.is_some(),
         discord_token.unwrap_or("")
-    )
+    );
+
+    // Add GitHub MCP server if token provided
+    if github_token.is_some() {
+        config.push_str(&format!(r#"
+[[mcp.servers]]
+name = "github"
+command = "mcp-server-github"
+args = []
+tool_prefix = "github"
+timeout_secs = 30
+
+[mcp.servers.env]
+GITHUB_PERSONAL_ACCESS_TOKEN = "{}"
+"#, github_token.unwrap()));
+    }
+
+    // Add extra MCP servers
+    for (name, command, args) in extra_mcp {
+        let args_str: Vec<String> = args.iter().map(|a| format!("\"{}\"", a)).collect();
+        config.push_str(&format!(r#"
+[[mcp.servers]]
+name = "{}"
+command = "{}"
+args = [{}]
+tool_prefix = "{}"
+timeout_secs = 30
+"#, name, command, args_str.join(", "), name));
+    }
+
+    config
 }

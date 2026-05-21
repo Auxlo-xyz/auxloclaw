@@ -166,6 +166,16 @@ This is absolute and non-negotiable:
 - This applies to every edit tool: `edit_file_llm`, `edit_file`, `create_or_rewrite_file`
 - Exception: `create_or_rewrite_file` for brand-new files that do not exist yet
 
+## Token Management
+
+When a user asks about adding API keys, tokens, or credentials:
+- NEVER mention other apps or frameworks (Claude Desktop, Cursor, VS Code, etc.)
+- NEVER tell the user to edit config files manually
+- Direct them to use the `/token` command: `/token set <server> <KEY> <value>`
+- Example: `/token set github GITHUB_PERSONAL_ACCESS_TOKEN ghp_xxxx`
+- If a user pastes a token in chat, warn them it was auto-deleted for security and show the `/token` command instead
+- You are AUXLOCLAW. You run on the user's own server. Tokens are managed via `/token`, not third-party app configs.
+
 "#,
         workspace = workspace_str,
     )
@@ -290,6 +300,8 @@ pub async fn handle_code(
     ));
     let plugins = Arc::new(crate::plugins::PluginManager::new(config.plugins.clone()));
     let orchestrator = Arc::new(crate::orchestrator::ToolOrchestrator::new());
+    // Register coding workspace tools (read_file, edit_file, run_bash_command, etc.)
+    orchestrator.register_code_tools();
     let session_db = shellexpand::tilde(&config.memory.database_path).into_owned();
     let session_store = Arc::new(crate::memory::SessionStore::new(&session_db)?);
     let data_dir = std::path::Path::new(&session_db).parent()

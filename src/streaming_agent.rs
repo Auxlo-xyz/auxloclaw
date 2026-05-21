@@ -251,11 +251,7 @@ impl StreamingAgent {
 
                 if !pending_tool_calls.is_empty() {
                     // Add assistant message with tool calls
-                    messages.push(Message {
-                        role: "assistant".into(),
-                        content: String::new(),
-                        tool_calls: Some(pending_tool_calls.clone()),
-                    });
+                    messages.push(Message::with_tool_calls("assistant", pending_tool_calls.clone()));
 
                     // Classify tools
                     let mut read_only: Vec<ToolCall> = Vec::new();
@@ -305,14 +301,7 @@ impl StreamingAgent {
                                 })
                                 .await;
 
-                            messages.push(Message {
-                                role: "tool".into(),
-                                content: crate::context::truncate_for_summary(
-                                    &result_str,
-                                    config.agent.tool_output_max_chars,
-                                ),
-                                tool_calls: None,
-                            });
+                            messages.push(Message::tool_result(id.clone(), name.clone(), crate::context::truncate_for_summary(&result_str, config.agent.tool_output_max_chars)));
                         }
                     }
 
@@ -350,14 +339,7 @@ impl StreamingAgent {
                                 .await;
                         }
 
-                        messages.push(Message {
-                            role: "tool".into(),
-                            content: crate::context::truncate_for_summary(
-                                &result_str,
-                                config.agent.tool_output_max_chars,
-                            ),
-                            tool_calls: None,
-                        });
+                        messages.push(Message::tool_result(tc.id.clone(), tc.function.name.clone(), crate::context::truncate_for_summary(&result_str, config.agent.tool_output_max_chars)));
                     }
 
                     let _ = tx.send(AgentEvent::ToolRoundComplete).await;

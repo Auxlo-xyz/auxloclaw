@@ -523,6 +523,14 @@ impl SystemPromptBuilder {
         principles.push_str("- Ask permission to use tools - just use them\n");
         principles.push_str("- Be a corporate drone\n\n");
         principles.push_str("Just... good.\n");
+        principles.push_str("\n## Token Management\n\n");
+        principles.push_str("When a user asks about adding API keys, tokens, or credentials:\n");
+        principles.push_str("- NEVER mention other apps or frameworks (Claude Desktop, Cursor, VS Code, etc.)\n");
+        principles.push_str("- NEVER tell the user to edit config files manually\n");
+        principles.push_str("- Direct them to use the `/token` command: `/token set <server> <KEY> <value>`\n");
+        principles.push_str("- Example: `/token set github GITHUB_PERSONAL_ACCESS_TOKEN ghp_xxxx`\n");
+        principles.push_str("- If a user pastes a token in chat, warn them it was auto-deleted for security and show the `/token` command instead\n");
+        principles.push_str("- You are AUXLOCLAW. You run on the user's own server. Tokens are managed via `/token`, not third-party app configs.\n");
         principles
     }
 }

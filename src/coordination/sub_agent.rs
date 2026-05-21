@@ -153,17 +153,9 @@ impl SubAgent {
             .with_skills(&[])
             .build();
 
-        let mut messages = vec![Message {
-            role: "system".into(),
-            content: system_prompt,
-            tool_calls: None,
-        }];
+        let mut messages = vec![Message::new("system", system_prompt)];
 
-        messages.push(Message {
-            role: "user".into(),
-            content: self.config.task.clone(),
-            tool_calls: None,
-        });
+        messages.push(Message::new("user", &self.config.task));
 
         loop {
             if *self.terminated.read().await {
@@ -208,11 +200,7 @@ impl SubAgent {
 
             if let Some(tool_calls) = &completion.tool_calls {
                 if !tool_calls.is_empty() {
-                    messages.push(Message {
-                        role: "assistant".into(),
-                        content: String::new(),
-                        tool_calls: Some(tool_calls.clone()),
-                    });
+                    messages.push(Message::with_tool_calls("assistant", tool_calls.clone()));
 
                     for tc in tool_calls {
                         tools_used.push(tc.function.name.clone());
@@ -226,11 +214,7 @@ impl SubAgent {
                             format!("Error: {}", result.error.unwrap_or_default())
                         };
 
-                        messages.push(Message {
-                            role: "tool".into(),
-                            content: result_str,
-                            tool_calls: None,
-                        });
+                        messages.push(Message::tool_result(tc.id.clone(), &tc.function.name, &result_str));
                     }
                     continue;
                 }

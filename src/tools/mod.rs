@@ -1,5 +1,6 @@
 pub mod approval;
 pub mod builtin;
+pub mod code;
 pub mod executor;
 pub mod web;
 

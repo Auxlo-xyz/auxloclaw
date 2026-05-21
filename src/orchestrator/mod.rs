@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::sync::RwLock;
 
 use crate::plugins::{plugin_result_error, SharedPluginManager};
 
@@ -48,6 +49,8 @@ pub struct ToolOrchestrator {
     registry: DashMap<String, Arc<dyn Tool>>,
     approval_policy: crate::tools::approval::ApprovalPolicy,
     plugins: Option<SharedPluginManager>,
+    /// Human-readable summaries of connected MCP servers, for system prompt awareness
+    mcp_server_summaries: RwLock<Vec<String>>,
 }
 
 impl ToolOrchestrator {
@@ -56,6 +59,7 @@ impl ToolOrchestrator {
             registry: DashMap::new(),
             approval_policy: crate::tools::approval::ApprovalPolicy::from_env(),
             plugins: None,
+            mcp_server_summaries: RwLock::new(Vec::new()),
         };
         orch.register_builtin();
         orch
@@ -81,6 +85,23 @@ impl ToolOrchestrator {
         self.register(Arc::new(XFetchTool));
     }
 
+    pub fn register_code_tools(&self) {
+        use crate::tools::code::{
+            ReadFileTool, ListFilesTool, EditFileTool, EditFileLlmTool,
+            CreateOrRewriteFileTool, RunBashCommandTool, RunSequentialCmdsTool,
+            RunParallelCmdsTool, GrepSearchTool,
+        };
+        self.register(Arc::new(ReadFileTool));
+        self.register(Arc::new(ListFilesTool));
+        self.register(Arc::new(EditFileTool));
+        self.register(Arc::new(EditFileLlmTool));
+        self.register(Arc::new(CreateOrRewriteFileTool));
+        self.register(Arc::new(RunBashCommandTool));
+        self.register(Arc::new(RunSequentialCmdsTool));
+        self.register(Arc::new(RunParallelCmdsTool));
+        self.register(Arc::new(GrepSearchTool));
+    }
+
     pub async fn register_mcp_tools(
         &self,
         config: &crate::config::McpConfig,
@@ -88,10 +109,69 @@ impl ToolOrchestrator {
         let registry = crate::mcp::McpRegistry::new();
         let tools = registry.load_tools(config).await?;
         let count = tools.len();
-        for tool in tools {
-            self.register(tool);
+        
+        // Group tool names by server to build summaries
+        let mut server_tools: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+        for server_cfg in &config.servers {
+            server_tools.insert(server_cfg.name.clone(), Vec::new());
         }
+        
+        for tool in &tools {
+            let tool_name = tool.name().to_string();
+            // Extract server prefix: mcp_{server}_{tool}
+            for server_cfg in &config.servers {
+                let prefix = format!("mcp_{}_", server_cfg.name);
+                if tool_name.starts_with(&prefix) {
+                    let bare_name = tool_name.strip_prefix(&prefix).unwrap_or(&tool_name);
+                    server_tools.entry(server_cfg.name.clone()).or_default().push(bare_name.to_string());
+                    break;
+                }
+            }
+            self.register(Arc::clone(&tool));
+        }
+        
+        // Build human-readable summaries
+        let mut summaries = Vec::new();
+        for (server, tool_names) in &server_tools {
+            if tool_names.is_empty() { continue; }
+            let tool_list = tool_names.join(", ");
+            summaries.push(format!(
+                "MCP server '{}' is connected and provides {} tools: [{}]. Use tools prefixed with 'mcp_{}_' to access them.",
+                server, tool_names.len(), tool_list, server
+            ));
+        }
+        *self.mcp_server_summaries.write().unwrap() = summaries;
+        
         Ok(count)
+    }
+
+    /// Hot-reload MCP servers from current config on disk.
+    pub async fn reload_mcp(&self) -> anyhow::Result<(usize, Vec<String>)> {
+        let path = std::env::var("AUXLOCLAW_CONFIG")
+            .unwrap_or_else(|_| "~/.auxloclaw/config.toml".into());
+        let expanded = if path.starts_with('~') {
+            dirs::home_dir()
+                .unwrap_or_else(|| "/root".into())
+                .join(&path[2..])
+        } else {
+            std::path::PathBuf::from(&path)
+        };
+        let config = crate::config::AppConfig::load(expanded.to_str().unwrap_or("~/.auxloclaw/config.toml"))?;
+        let count = self.register_mcp_tools(&config.mcp).await?;
+        Ok((count, self.mcp_summaries()))
+    }
+
+    /// List all registered tool names that start with a given prefix
+    pub fn tools_with_prefix(&self, prefix: &str) -> Vec<String> {
+        self.registry
+            .iter()
+            .filter(|entry| entry.key().starts_with(prefix))
+            .map(|entry| entry.key().clone())
+            .collect()
+    }
+
+    pub fn mcp_summaries(&self) -> Vec<String> {
+        self.mcp_server_summaries.read().unwrap().clone()
     }
 
     pub fn set_plugins(&mut self, plugins: SharedPluginManager) {
