@@ -18,7 +18,7 @@
 curl -fsSL https://raw.githubusercontent.com/larsontrey720/auxloclaw/master/get.sh | bash
 ```
 
-Downloads a pre-built binary. No Rust, no compilation, installs in seconds.
+Downloads a pre-built static binary for your platform (Linux or macOS, x86_64 or aarch64). No Rust required.
 
 ---
 
