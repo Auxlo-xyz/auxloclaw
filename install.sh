@@ -2,13 +2,13 @@
 set -euo pipefail
 
 # AUXLOCLAW Installer
-# Usage: curl -sSL https://raw.githubusercontent.com/larsontrey720/auxloclaw/master/install.sh | bash
+# Usage: curl -sSL https://raw.githubusercontent.com/Auxlo-xyz/auxloclaw/master/install.sh | bash
 # Options:
 #   AUXLOCLAW_VERSION       - specific version tag (default: latest)
 #   AUXLOCLAW_DIR           - install directory (default: /usr/local/bin)
 #   AUXLOCLAW_SKIP_CONFIRM  - set to 1 to skip confirmation prompt
 
-REPO="larsontrey720/auxloclaw"
+REPO="Auxlo-xyz/auxloclaw"
 BINARY="auxloclaw"
 INSTALL_DIR="${AUXLOCLAW_DIR:-/usr/local/bin}"
 GITHUB_API="https://api.github.com/repos/${REPO}/releases"

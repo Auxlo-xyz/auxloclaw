@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Auxlo <hello@auxlo.xyz>"]
 description = "Ultra-high-performance AI agent framework - beats Hermes and Nanobot"
 license = "MIT"
-repository = "https://github.com/larsontrey720/auxloclaw"
+repository = "https://github.com/Auxlo-xyz/auxloclaw"
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.tar.gz"

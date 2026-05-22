@@ -15,7 +15,7 @@
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/larsontrey720/auxloclaw/master/get.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Auxlo-xyz/auxloclaw/master/get.sh | bash
 ```
 
 Downloads a pre-built static binary for your platform (Linux or macOS, x86_64 or aarch64). No Rust required.

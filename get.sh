@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="larsontrey720/auxloclaw"
+REPO="Auxlo-xyz/auxloclaw"
 BINARY="auxloclaw"
 INSTALL_DIR="/usr/local/bin"
 
