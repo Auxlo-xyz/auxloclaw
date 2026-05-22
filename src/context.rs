@@ -73,11 +73,13 @@ pub fn build_pruned_messages(
     let split_at = history.len().saturating_sub(keep_messages);
     let (older, recent) = history.split_at(split_at);
 
-    let mut messages = vec![Message::new("system", system_prompt)];
-
+    let mut sys_prompt = system_prompt;
     if let Some(summary) = summarize_older_history(older) {
-        messages.push(Message::new("system", summary));
+        sys_prompt.push_str("\n\n## Earlier Conversation Summary\n");
+        sys_prompt.push_str(&summary);
     }
+
+    let mut messages = vec![Message::new("system", sys_prompt)];
 
     for m in recent {
         messages.push(Message::new(
