@@ -15,14 +15,10 @@
 ## Install
 
 ```bash
-cargo binstall auxloclaw
+curl -fsSL https://raw.githubusercontent.com/larsontrey720/auxloclaw/master/get.sh | bash
 ```
 
-Requires `cargo-binstall`. Install it at https://github.com/cargo-bins/cargo-binstall.
-
-```bash
-curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-```
+Downloads a pre-built binary. No Rust, no compilation, installs in seconds.
 
 ---
 
