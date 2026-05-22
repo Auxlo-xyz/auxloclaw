@@ -15,14 +15,14 @@
 ## Install
 
 ```bash
-# Recommended: download pre-built binary (fast)
 cargo binstall auxloclaw
-
-# Alternative: compile from source (slow)
-cargo install auxloclaw
 ```
 
-Requires Rust 1.95+. Install Rust at [rustup.rs](https://rustup.rs).
+Requires `cargo-binstall`. Install it at https://github.com/cargo-bins/cargo-binstall.
+
+```bash
+curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+```
 
 ---
 
