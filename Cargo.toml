@@ -2,7 +2,7 @@
 name = "auxloclaw"
 version = "0.2.5"
 edition = "2021"
-authors = ["Auxlo <hello@auxlo.xyz>"]
+authors = ["Auxlo.xyz <hello@auxlo.xyz>"]
 description = "Ultra-high-performance AI agent framework - beats Hermes and Nanobot"
 license = "MIT"
 repository = "https://github.com/Auxlo-xyz/auxloclaw"

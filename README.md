@@ -372,6 +372,6 @@ MIT License - see [LICENSE](LICENSE) file.
 
 <div align="center">
 
-**Built with love by [Auxlo](https://auxlo.xyz)**
+**Built with love by [Auxlo.xyz](https://auxlo.xyz)**
 
 </div>
