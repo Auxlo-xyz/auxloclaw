@@ -83,11 +83,11 @@ download_binary() {
     # The release asset is named with platform suffix
     local target
     case "${os}-${arch}" in
-        linux-x86_64)  target="x86_64-unknown-linux-gnu" ;;
-        linux-aarch64) target="aarch64-unknown-linux-gnu" ;;
+        linux-x86_64)  target="x86_64-unknown-linux-musl" ;;
+        linux-aarch64) target="aarch64-unknown-linux-musl" ;;
         macos-x86_64)  target="x86_64-apple-darwin" ;;
         macos-aarch64) target="aarch64-apple-darwin" ;;
-        *)             target="${arch}-${os}" ;;
+        *) warn "Unsupported platform: ${os}-${arch}"; return 1 ;;
     esac
     local asset_name="${BINARY}-${target}"
     url="https://github.com/${REPO}/releases/download/${version}/${asset_name}"
