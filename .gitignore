@@ -50,3 +50,4 @@ Thumbs.db
 .nyc_output/notepad-app/*
 notepad-app/
 notepad/
+.cargo/
