@@ -41,21 +41,21 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install musl-tools
-        if: runner.os == 'Linux' && !matrix.use_cross
+        if: ${{ runner.os == 'Linux' && !matrix.use_cross }}
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools
 
       - name: Install cross
-        if: matrix.use_cross
+        if: ${{ matrix.use_cross }}
         run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build (native cargo)
-        if: !matrix.use_cross
+        if: ${{ !matrix.use_cross }}
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Build (cross)
-        if: matrix.use_cross
+        if: ${{ matrix.use_cross }}
         run: cross build --release --target ${{ matrix.target }}
 
       - name: Rename binary
