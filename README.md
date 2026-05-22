@@ -15,6 +15,10 @@
 ## Install
 
 ```bash
+# Recommended: download pre-built binary (fast)
+cargo binstall auxloclaw
+
+# Alternative: compile from source (slow)
 cargo install auxloclaw
 ```
 
