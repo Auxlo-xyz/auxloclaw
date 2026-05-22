@@ -80,12 +80,15 @@ download_binary() {
     local version="$1" os="$2" arch="$3"
     local url
 
-    # The release contains a single raw binary
-    url="https://github.com/${REPO}/releases/download/${version}/${BINARY}"
+    # The release asset is named with platform suffix
+    local asset_name="${BINARY}-${os}-${arch}"
+    url="https://github.com/${REPO}/releases/download/${version}/${asset_name}"
 
     info "Downloading ${BINARY} ${version} for ${os}/${arch}..."
 
-    if ! curl -sL --fail "$url" -o "${TMP_DIR}/${BINARY}"; then
+    local http_code
+    http_code=$(curl -sL -w '%{http_code}' -o "${TMP_DIR}/${BINARY}" "$url")
+    if [ "$http_code" != "200" ] || [ ! -s "${TMP_DIR}/${BINARY}" ]; then
         warn "Download failed (no pre-built binary for ${os}/${arch})"
         return 1
     fi
