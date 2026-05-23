@@ -197,7 +197,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "auxloclaw"
-version = "0.2.1"
+version = "0.2.5"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2487,6 +2487,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
+ "h2 0.4.14",
  "http 1.4.0",
  "http-body 1.0.1",
  "http-body-util",

@@ -4,11 +4,12 @@ use async_trait::async_trait;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
+use regex::Regex;
 
 use crate::orchestrator::{Tool, ToolResult};
 
 // =====================================================
-// WEB SEARCH TOOL (uses webserp CLI)
+// WEB SEARCH TOOL (DuckDuckGo HTML - no API key needed)
 // =====================================================
 
 pub struct WebSearchTool;
@@ -18,7 +19,7 @@ impl Tool for WebSearchTool {
     fn name(&self) -> &str { "web_search" }
     
     fn description(&self) -> &str { 
-        "Search the web using multiple search engines. Returns JSON results with titles, URLs, and snippets."
+        "Search the web using DuckDuckGo. Returns JSON results with titles, URLs, and snippets. No API key required."
     }
     
     fn parameters(&self) -> serde_json::Value {
@@ -29,14 +30,9 @@ impl Tool for WebSearchTool {
                     "type": "string",
                     "description": "Search query"
                 },
-                "engines": {
-                    "type": "string",
-                    "description": "Comma-separated engines: google,duckduckgo,brave,yahoo,mojeek,startpage,presearch (default: all)",
-                    "default": "all"
-                },
                 "max_results": {
                     "type": "integer",
-                    "description": "Max results per engine (default: 10)",
+                    "description": "Max results (default: 10)",
                     "default": 10
                 }
             },
@@ -50,83 +46,152 @@ impl Tool for WebSearchTool {
         
         let max_results = args.get("max_results")
             .and_then(|v| v.as_u64())
-            .unwrap_or(10);
+            .unwrap_or(10) as usize;
         
-        let engines = args.get("engines")
-            .and_then(|v| v.as_str())
-            .unwrap_or("all");
+        let client = reqwest::Client::builder()
+            .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15")
+            .timeout(std::time::Duration::from_secs(15))
+            .build()?;
         
-        // Call webserp CLI
-        let mut cmd = Command::new("webserp");
-        cmd.arg(query)
-            .arg("-n").arg(max_results.to_string());
-        
-        if engines != "all" {
-            cmd.arg("-e").arg(engines);
-        }
-        
-        let output = cmd.output()
-            .map_err(|e| anyhow!("Failed to run webserp: {}", e))?;
-        
-        if !output.status.success() {
-            return Ok(ToolResult {
-                tool_name: self.name().into(),
-                success: false,
-                output: serde_json::json!({
-                    "error": String::from_utf8_lossy(&output.stderr).to_string()
-                }),
-                error: Some("webserp failed".into()),
-                duration_ms: 0,
-            });
-        }
-        
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let results: Vec<WebSearchResult> = match serde_json::from_str(&stdout) {
-            Ok(r) => r,
-            Err(e) => {
-                return Ok(ToolResult {
-                    tool_name: self.name().into(),
-                    success: false,
-                    output: serde_json::json!({
-                        "error": format!("Failed to parse webserp output: {}", e),
-                        "raw": stdout.to_string()
-                    }),
-                    error: Some("Parse error".into()),
-                    duration_ms: 0,
-                });
-            }
-        };
-        
-        // Format results nicely
-        let formatted: Vec<serde_json::Value> = results.iter().take(20).map(|r| {
-            serde_json::json!({
-                "title": r.title,
-                "url": r.url,
-                "snippet": r.content,
-                "engine": r.engine
-            })
-        }).collect();
-        
-        Ok(ToolResult {
-            tool_name: self.name().into(),
-            success: true,
-            output: serde_json::json!({
-                "query": query,
-                "total": results.len(),
-                "results": formatted
-            }),
-            error: None,
-            duration_ms: 0,
-        })
+        search_ddg(&client, query, max_results).await
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct WebSearchResult {
-    title: String,
-    url: String,
-    content: String,
-    engine: String,
+fn decode_ddg_url(href: &str) -> String {
+    // DDG returns URLs directly now (no uddg redirect)
+    let url = href.replace("&amp;", "&");
+    // Decode percent-encoded characters
+    let mut result = String::with_capacity(url.len());
+    let bytes = url.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(byte) = u8::from_str_radix(
+                std::str::from_utf8(&bytes[i+1..i+3]).unwrap_or("XX"), 16
+            ) {
+                result.push(byte as char);
+                i += 3;
+                continue;
+            }
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+    result
+}
+
+fn strip_html_tags(s: &str) -> String {
+    let re = Regex::new(r"<[^>]+>").unwrap();
+    re.replace_all(s, "").to_string()
+}
+
+fn decode_html_entities(s: &str) -> String {
+    s.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#x27;", "'")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&#x2F;", "/")
+        .replace("&#47;", "/")
+}
+
+async fn search_ddg(
+    client: &reqwest::Client,
+    query: &str,
+    max_results: usize,
+) -> Result<ToolResult> {
+    // POST to DuckDuckGo HTML endpoint (HTTP/2)
+    // This is what the ddgs Python library does - it bypasses CAPTCHAs
+    let params = [
+        ("q", query),
+        ("b", ""),
+        ("l", "us-en"),
+    ];
+    
+    let resp = client.post("https://html.duckduckgo.com/html/")
+        .form(&params)
+        .send().await?;
+    
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Ok(ToolResult {
+            tool_name: "web_search".into(),
+            success: false,
+            output: serde_json::json!({
+                "error": format!("DuckDuckGo returned HTTP {}: {}", status, &body[..body.len().min(200)])
+            }),
+            error: Some(format!("HTTP {}", status)),
+            duration_ms: 0,
+        });
+    }
+    
+    let html = resp.text().await?;
+    
+    // Check for CAPTCHA challenge
+    if html.contains("anomaly-modal") {
+        return Ok(ToolResult {
+            tool_name: "web_search".into(),
+            success: false,
+            output: serde_json::json!({
+                "error": "DuckDuckGo CAPTCHA triggered. Try again later or use a proxy.",
+                "provider": "duckduckgo"
+            }),
+            error: Some("CAPTCHA".into()),
+            duration_ms: 0,
+        });
+    }
+    
+    // Parse results from HTML
+    // Structure: <a class="result__a" href="URL">TITLE</a>
+    //            <a class="result__snippet" href="URL">SNIPPET</a>
+    let title_re = Regex::new(r#"<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>"#)?;
+    let snippet_re = Regex::new(r#"<a[^>]*class="result__snippet"[^>]*href="([^"]*)"[^>]*>(.*?)</a>"#)?;
+    
+    let titles: Vec<(String, String)> = title_re.captures_iter(&html)
+        .map(|cap| {
+            let url = decode_ddg_url(cap.get(1).map(|m| m.as_str()).unwrap_or(""));
+            let title = decode_html_entities(&strip_html_tags(cap.get(2).map(|m| m.as_str()).unwrap_or("")));
+            (url, title)
+        })
+        .collect();
+    
+    let snippets: Vec<String> = snippet_re.captures_iter(&html)
+        .map(|cap| {
+            decode_html_entities(&strip_html_tags(cap.get(2).map(|m| m.as_str()).unwrap_or("")))
+        })
+        .collect();
+    
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    for (i, (url, title)) in titles.iter().enumerate() {
+        if results.len() >= max_results {
+            break;
+        }
+        if url.is_empty() || url.starts_with("javascript:") || url.contains("duckduckgo.com/y.js") {
+            continue;
+        }
+        let snippet = snippets.get(i).cloned().unwrap_or_default();
+        results.push(serde_json::json!({
+            "title": title,
+            "url": url,
+            "snippet": snippet
+        }));
+    }
+    
+    Ok(ToolResult {
+        tool_name: "web_search".into(),
+        success: true,
+        output: serde_json::json!({
+            "query": query,
+            "provider": "duckduckgo",
+            "total": results.len(),
+            "results": results
+        }),
+        error: None,
+        duration_ms: 0,
+    })
 }
 
 // =====================================================
