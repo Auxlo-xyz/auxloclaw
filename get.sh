@@ -39,9 +39,19 @@ main() {
     # Install lightpanda browser engine if missing
     if ! command -v lightpanda &>/dev/null; then
         echo "Installing lightpanda browser engine..."
+        local lp_arch="$(uname -m)"
+        case "$lp_arch" in
+            x86_64)  lp_arch="x86_64" ;;
+            aarch64|arm64) lp_arch="aarch64" ;;
+        esac
+        local lp_os="$(uname -s)"
+        case "$lp_os" in
+            Linux)  lp_os="linux" ;;
+            Darwin) lp_os="macos" ;;
+        esac
         curl -fsSL -o /usr/local/bin/lightpanda \
-            "https://github.com/nicholasgasior/lightpanda/releases/latest/download/lightpanda-x86_64-linux" \
-            || echo "Warning: lightpanda install failed (manual: https://github.com/nicholasgasior/lightpanda)"
+            "https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-${lp_arch}-${lp_os}" \
+            || echo "Warning: lightpanda install failed (manual: https://github.com/lightpanda-io/browser)"
         chmod +x /usr/local/bin/lightpanda 2>/dev/null || true
     fi
 

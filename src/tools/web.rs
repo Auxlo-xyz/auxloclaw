@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use regex::Regex;
 
 use crate::orchestrator::{Tool, ToolResult};
@@ -187,21 +187,17 @@ fn ensure_lightpanda() -> Result<()> {
 
     if !has_lp {
         tracing::info!("lightpanda not found, auto-installing...");
-        let install = Command::new("bash")
-            .args(["-c", "curl -fsSL -o /usr/local/bin/lightpanda 'https://github.com/nicholasgasior/lightpanda/releases/latest/download/lightpanda-x86_64-linux' && chmod +x /usr/local/bin/lightpanda"])
-            .output();
-        match install {
-            Ok(o) if o.status.success() => {
-                tracing::info!("lightpanda installed successfully");
-            }
-            Ok(o) => {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                anyhow::bail!("lightpanda install failed: {}", stderr.trim());
-            }
-            Err(e) => {
-                anyhow::bail!("lightpanda install error: {}", e);
-            }
+        let install_ok = Command::new("sh")
+            .args(["-c", "LP_ARCH=$(uname -m | sed 's/arm64/aarch64/') && LP_OS=$(uname -s | tr 'A-Z' 'a-z') && curl -fsSL -o /usr/local/bin/lightpanda \"https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-${LP_ARCH}-${LP_OS}\" && chmod +x /usr/local/bin/lightpanda"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !install_ok {
+            return Err(anyhow!("lightpanda auto-install failed. Install manually:\ncurl -fsSL -o /usr/local/bin/lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-$(uname -m | sed 's/arm64/aarch64/')-$(uname -s | tr 'A-Z' 'a-z') && chmod +x /usr/local/bin/lightpanda"));
         }
+        tracing::info!("lightpanda installed successfully");
     }
 
     // Check websockets Python package
