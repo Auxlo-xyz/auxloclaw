@@ -126,12 +126,7 @@ async fn run_update() -> Result<String, anyhow::Error> {
 
     let ver = String::from_utf8_lossy(&version.stdout).trim().to_string();
     report.push_str(&format!("Installed: {ver}\n"));
-    report.push_str("Update complete. Restart the gateway to use the new version.");
-
-    // Spawn `auxloclaw gateway` as a detached background process
-    let _pid = Command::new(INSTALL_PATH)
-        .args(["gateway"])
-        .spawn();
+    report.push_str("Update complete. Restart the gateway to use the new version.\n");
 
     Ok(report)
 }
