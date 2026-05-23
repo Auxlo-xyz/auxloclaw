@@ -170,32 +170,46 @@ fn ensure_agent_browser() -> Result<()> {
         .unwrap_or(false);
 
     if !has_ab {
-        tracing::info!("agent-browser not found, auto-installing...");
-        // Pipe "yes" to stdin so any interactive prompts (e.g. playwright-browsers
-        // dependency) are auto-answered with Y instead of hanging/failing.
-        let install_ok = Command::new("sh")
-            .args(["-c", "curl -fsSL https://media.zocomputer.com/install/agentbrowser2.sh | bash"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .and_then(|mut child| {
-                // Write "y\n" repeatedly to stdin to handle any prompts
-                if let Some(ref mut stdin) = child.stdin {
-                    use std::io::Write;
-                    let _ = stdin.write_all(b"y\ny\ny\ny\ny\n");
-                    let _ = stdin.flush();
-                }
-                // Close stdin so the child doesn't wait for more input
-                drop(child.stdin.take());
-                child.wait()
-            })
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if !install_ok {
-            return Err(anyhow!("agent-browser auto-install failed. Install manually:\ncurl -fsSL https://media.zocomputer.com/install/agentbrowser2.sh | bash"));
+        tracing::info!("agent-browser not found, installing via npm...");
+        let install = Command::new("npm")
+            .args(["install", "-g", "agent-browser"])
+            .output();
+        match install {
+            Ok(o) if o.status.success() => {
+                tracing::info!("agent-browser installed via npm");
+            }
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                return Err(anyhow!(
+                    "Failed to install agent-browser: {}\nFix: npm install -g agent-browser",
+                    stderr.trim()
+                ));
+            }
+            Err(e) => {
+                return Err(anyhow!(
+                    "npm not available: {}\nFix: install Node.js/npm, then run: npm install -g agent-browser",
+                    e
+                ));
+            }
         }
-        tracing::info!("agent-browser installed successfully");
+
+        // Install the Chromium browser engine that agent-browser needs
+        tracing::info!("Installing Chromium for agent-browser...");
+        let browser_install = Command::new("npx")
+            .args(["playwright", "install", "chromium"])
+            .output();
+        match browser_install {
+            Ok(o) if o.status.success() => {
+                tracing::info!("Chromium installed for agent-browser");
+            }
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                tracing::warn!("Chromium install warning: {}", stderr.trim());
+            }
+            Err(e) => {
+                tracing::warn!("Could not install Chromium: {}", e);
+            }
+        }
     }
     Ok(())
 }
