@@ -96,53 +96,62 @@ async fn run_update() -> Result<String, anyhow::Error> {
     let bytes = resp.bytes().await?;
     std::fs::write(&tmp_path, &bytes)?;
 
-    // Step 6: replace binary
-    report.push_str(&format!("Installing to {INSTALL_PATH}...\n"));
+    report.push_str(&format!(
+        "Downloaded {} ({} bytes)\n",
+        asset_name,
+        bytes.len()
+    ));
 
-    let mv = Command::new("mv")
-        .args([&tmp_path, INSTALL_PATH])
-        .output()?;
-
-    if !mv.status.success() {
-        let _ = std::fs::remove_file(&tmp_path);
-        anyhow::bail!(
-            "Failed to replace binary: {}",
-            String::from_utf8_lossy(&mv.stderr)
-        );
-    }
-
-    let _ = Command::new("chmod")
-        .args(["+x", INSTALL_PATH])
-        .output()?;
-
-    // Step 7: verify
-    let version = Command::new(INSTALL_PATH)
-        .args(["--version"])
-        .output()?;
-
-    let ver = String::from_utf8_lossy(&version.stdout).trim().to_string();
-    report.push_str(&format!("Installed: {ver}\n"));
-
-    // Step 8: auto-restart gateway
-    // Spawn a detached shell that sleeps 5s (giving time for the response
-    // to reach the user), then exec-replaces itself with the new binary.
-    // exec() replaces the PID so the old gateway stops and the new one starts.
-    report.push_str("Restarting gateway in 5 seconds...\n");
+    // Step 6: spawn detached stop -> replace -> restart script
+    //
+    // Architecture requirement: the running gateway MUST be stopped BEFORE the
+    // binary on disk is replaced, then restarted with the new binary.
+    // The script sleeps 3s to let the HTTP response reach the caller, then:
+    //   1. Kills the running gateway (stop)
+    //   2. Replaces the binary (mv + chmod)
+    //   3. Execs the new binary (restart)
+    report.push_str("Scheduling gateway restart...\n");
 
     let restart_script = format!(
-        "#!/bin/sh\nsleep 5\npkill -f 'auxloclaw gateway'\nsleep 1\nexec {} gateway\n",
-        INSTALL_PATH
+        r#"#!/bin/sh
+# Wait for the response to reach the caller
+sleep 3
+
+# Step A: stop the running gateway
+pkill -f 'auxloclaw gateway' 2>/dev/null
+# Give the process time to exit cleanly
+sleep 2
+
+# Step B: replace the binary
+mv "{tmp_path}" "{INSTALL_PATH}"
+chmod +x "{INSTALL_PATH}"
+
+# Step C: verify the new binary works
+NEW_VER=$("{INSTALL_PATH}" --version 2>/dev/null || echo "unknown")
+echo "auxloclaw-updater: installed $NEW_VER, starting gateway..." >&2
+
+# Step D: restart the gateway (exec replaces this shell process)
+exec "{INSTALL_PATH}" gateway
+"#,
+        tmp_path = tmp_path,
+        INSTALL_PATH = INSTALL_PATH,
     );
+
     let restart_path = "/tmp/auxloclaw-restart.sh";
     std::fs::write(restart_path, restart_script)?;
     let _ = Command::new("chmod").args(["+x", restart_path]).output()?;
 
+    // Double-fork: detach from the gateway process so it survives the kill
     let _ = Command::new("/bin/sh")
         .arg(restart_path)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()?;
+
+    report.push_str(&format!(
+        "Update to v{latest_ver} ready. Gateway will restart in ~5 seconds."
+    ));
 
     Ok(report)
 }
