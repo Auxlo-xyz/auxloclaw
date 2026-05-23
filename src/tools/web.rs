@@ -177,25 +177,60 @@ fn find_cdp_script() -> String {
     "lightpanda-cdp".to_string()
 }
 
-fn check_lightpanda() -> Option<ToolResult> {
-    let check = Command::new("which")
+fn ensure_lightpanda() -> Result<()> {
+    // Check lightpanda binary
+    let has_lp = Command::new("which")
         .arg("lightpanda")
-        .output();
-    match check {
-        Ok(out) if out.status.success() => return None,
-        _ => {}
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if !has_lp {
+        tracing::info!("lightpanda not found, auto-installing...");
+        let install = Command::new("bash")
+            .args(["-c", "curl -fsSL -o /usr/local/bin/lightpanda 'https://github.com/nicholasgasior/lightpanda/releases/latest/download/lightpanda-x86_64-linux' && chmod +x /usr/local/bin/lightpanda"])
+            .output();
+        match install {
+            Ok(o) if o.status.success() => {
+                tracing::info!("lightpanda installed successfully");
+            }
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                anyhow::bail!("lightpanda install failed: {}", stderr.trim());
+            }
+            Err(e) => {
+                anyhow::bail!("lightpanda install error: {}", e);
+            }
+        }
     }
-    Some(ToolResult {
-        tool_name: "browser".into(),
-        success: false,
-        output: serde_json::json!({
-            "error": "lightpanda is not installed",
-            "install_command": "curl -L -o /usr/local/bin/lightpanda https://github.com/nicholasgasior/lightpanda/releases/latest/download/lightpanda-x86_64-linux && chmod +x /usr/local/bin/lightpanda",
-            "note": "Also requires: pip install websockets"
-        }),
-        error: Some("lightpanda not found".into()),
-        duration_ms: 0,
-    })
+
+    // Check websockets Python package
+    let has_ws = Command::new("python3")
+        .args(["-c", "import websockets"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if !has_ws {
+        tracing::info!("websockets not found, auto-installing...");
+        let install = Command::new("pip")
+            .args(["install", "websockets", "-q"])
+            .output();
+        match install {
+            Ok(o) if o.status.success() => {
+                tracing::info!("websockets installed successfully");
+            }
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                anyhow::bail!("websockets install failed: {}", stderr.trim());
+            }
+            Err(e) => {
+                anyhow::bail!("websockets install error: {}", e);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn run_cdp(args: &[&str]) -> Result<(bool, serde_json::Value)> {
@@ -233,7 +268,15 @@ impl Tool for BrowserOpenTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
-        if let Some(result) = check_lightpanda() { return Ok(result); }
+        if let Err(e) = ensure_lightpanda() {
+            return Ok(ToolResult {
+                tool_name: "browser".into(),
+                success: false,
+                output: serde_json::json!({"error": e.to_string()}),
+                error: Some(e.to_string()),
+                duration_ms: 0,
+            });
+        }
         let url = args["url"].as_str()
             .ok_or_else(|| anyhow!("Missing url parameter"))?;
         let start = std::time::Instant::now();
@@ -266,7 +309,15 @@ impl Tool for BrowserSnapshotTool {
     }
 
     async fn execute(&self, _args: serde_json::Value) -> Result<ToolResult> {
-        if let Some(result) = check_lightpanda() { return Ok(result); }
+        if let Err(e) = ensure_lightpanda() {
+            return Ok(ToolResult {
+                tool_name: "browser".into(),
+                success: false,
+                output: serde_json::json!({"error": e.to_string()}),
+                error: Some(e.to_string()),
+                duration_ms: 0,
+            });
+        }
         let start = std::time::Instant::now();
         let (ok, data) = run_cdp(&["snapshot"])?;
         let duration_ms = start.elapsed().as_millis() as u64;
@@ -300,7 +351,15 @@ impl Tool for BrowserClickTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
-        if let Some(result) = check_lightpanda() { return Ok(result); }
+        if let Err(e) = ensure_lightpanda() {
+            return Ok(ToolResult {
+                tool_name: "browser".into(),
+                success: false,
+                output: serde_json::json!({"error": e.to_string()}),
+                error: Some(e.to_string()),
+                duration_ms: 0,
+            });
+        }
         let selector = args["selector"].as_str()
             .ok_or_else(|| anyhow!("Missing selector parameter"))?;
         let start = std::time::Instant::now();
@@ -337,7 +396,15 @@ impl Tool for BrowserFillTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
-        if let Some(result) = check_lightpanda() { return Ok(result); }
+        if let Err(e) = ensure_lightpanda() {
+            return Ok(ToolResult {
+                tool_name: "browser".into(),
+                success: false,
+                output: serde_json::json!({"error": e.to_string()}),
+                error: Some(e.to_string()),
+                duration_ms: 0,
+            });
+        }
         let selector = args["selector"].as_str()
             .ok_or_else(|| anyhow!("Missing selector parameter"))?;
         let text = args["text"].as_str()
@@ -378,7 +445,15 @@ impl Tool for BrowserScreenshotTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
-        if let Some(result) = check_lightpanda() { return Ok(result); }
+        if let Err(e) = ensure_lightpanda() {
+            return Ok(ToolResult {
+                tool_name: "browser".into(),
+                success: false,
+                output: serde_json::json!({"error": e.to_string()}),
+                error: Some(e.to_string()),
+                duration_ms: 0,
+            });
+        }
         let path = args.get("path")
             .and_then(|v| v.as_str())
             .unwrap_or("/tmp/screenshot.png");
@@ -419,7 +494,15 @@ impl Tool for BrowserGetTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
-        if let Some(result) = check_lightpanda() { return Ok(result); }
+        if let Err(e) = ensure_lightpanda() {
+            return Ok(ToolResult {
+                tool_name: "browser".into(),
+                success: false,
+                output: serde_json::json!({"error": e.to_string()}),
+                error: Some(e.to_string()),
+                duration_ms: 0,
+            });
+        }
         let what = args["what"].as_str()
             .ok_or_else(|| anyhow!("Missing what parameter"))?;
         let start = std::time::Instant::now();
@@ -584,37 +667,14 @@ impl Tool for WebFetchTool {
             .and_then(|v| v.as_str())
             .unwrap_or("full");
         
-        // Check if lightpanda is installed
-        let check = Command::new("which")
-            .arg("lightpanda")
-            .output();
-        
-        match check {
-            Ok(out) if !out.status.success() => {
-                return Ok(ToolResult {
-                    tool_name: "web_fetch".into(),
-                    success: false,
-                    output: serde_json::json!({
-                        "error": "lightpanda is not installed. Install with:",
-                        "install_command": "curl -L -o /usr/local/bin/lightpanda https://github.com/nicholasgasior/lightpanda/releases/latest/download/lightpanda-x86_64-linux && chmod +x /usr/local/bin/lightpanda",
-                        "repo": "https://github.com/nicholasgasior/lightpanda"
-                    }),
-                    error: Some("lightpanda not found".into()),
-                    duration_ms: 0,
-                });
-            }
-            Err(e) => {
-                return Ok(ToolResult {
-                    tool_name: "web_fetch".into(),
-                    success: false,
-                    output: serde_json::json!({
-                        "error": format!("Failed to check for lightpanda: {}", e),
-                    }),
-                    error: Some(e.to_string()),
-                    duration_ms: 0,
-                });
-            }
-            _ => {}
+        if let Err(e) = ensure_lightpanda() {
+            return Ok(ToolResult {
+                tool_name: "web_fetch".into(),
+                success: false,
+                output: serde_json::json!({"error": e.to_string()}),
+                error: Some(e.to_string()),
+                duration_ms: 0,
+            });
         }
         
         let start = std::time::Instant::now();
