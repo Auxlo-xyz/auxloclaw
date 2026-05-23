@@ -384,6 +384,27 @@ impl LLMProvider for OpenAICompatibleProvider {
             return Err(anyhow!("Provider {} HTTP {}: {}", self.name, status, response_body));
         }
 
+        // Check for error responses that return HTTP 200 with error in body (some providers do this)
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&response_body) {
+            if val.get("object").and_then(|o| o.as_str()) == Some("error")
+                || val.get("error").is_some() && !val.get("choices").is_some()
+            {
+                let err_msg = val.get("message")
+                    .or_else(|| val.get("error").and_then(|e| e.get("message")))
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("Unknown provider error");
+                let err_code = val.get("code")
+                    .or_else(|| val.get("error").and_then(|e| e.get("code")))
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "unknown".into());
+                tracing::error!(
+                    "Provider {} returned error in body (HTTP {}): code={} message={}\nFull response: {}",
+                    self.name, status, err_code, err_msg, response_body
+                );
+                return Err(anyhow!("Provider {} error (code={}): {}", self.name, err_code, err_msg));
+            }
+        }
+
         let completion: OpenAICompletion = match serde_json::from_str(&response_body) {
             Ok(c) => c,
             Err(e) => {
