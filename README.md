@@ -5,7 +5,6 @@
 **Ultra-High-Performance AI Agent Framework**
 
 [![Rust](https://img.shields.io/badge/rust-1.95%2B-orange.svg)](https://www.rust-lang.org/)
-[![Crates.io](https://img.shields.io/crates/v/auxloclaw.svg)](https://crates.io/crates/auxloclaw)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 </div>
