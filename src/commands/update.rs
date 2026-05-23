@@ -84,11 +84,7 @@ async fn run_update() -> Result<String, anyhow::Error> {
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("No download URL"))?;
 
-    // Step 5: stop
-    // Kill any auxloclaw process that is NOT the current updater process
-    // Use `pkill -f "auxloclaw gateway"` or find+kill.
-
-    // Step 6: download to temp file
+    // Step 5: download to temp file
     report.push_str(&format!("Downloading {asset_name}...\n"));
     let tmp_path = format!("{INSTALL_PATH}.tmp");
 
@@ -100,7 +96,7 @@ async fn run_update() -> Result<String, anyhow::Error> {
     let bytes = resp.bytes().await?;
     std::fs::write(&tmp_path, &bytes)?;
 
-    // Step 7: replace binary
+    // Step 6: replace binary
     report.push_str(&format!("Installing to {INSTALL_PATH}...\n"));
 
     let mv = Command::new("mv")
@@ -119,14 +115,34 @@ async fn run_update() -> Result<String, anyhow::Error> {
         .args(["+x", INSTALL_PATH])
         .output()?;
 
-    // Step 8: verify
+    // Step 7: verify
     let version = Command::new(INSTALL_PATH)
         .args(["--version"])
         .output()?;
 
     let ver = String::from_utf8_lossy(&version.stdout).trim().to_string();
     report.push_str(&format!("Installed: {ver}\n"));
-    report.push_str("Update complete. Restart the gateway to use the new version.\n");
+
+    // Step 8: auto-restart gateway
+    // Spawn a detached shell that sleeps 5s (giving time for the response
+    // to reach the user), then exec-replaces itself with the new binary.
+    // exec() replaces the PID so the old gateway stops and the new one starts.
+    report.push_str("Restarting gateway in 5 seconds...\n");
+
+    let restart_script = format!(
+        "#!/bin/sh\nsleep 5\npkill -f 'auxloclaw gateway'\nsleep 1\nexec {} gateway\n",
+        INSTALL_PATH
+    );
+    let restart_path = "/tmp/auxloclaw-restart.sh";
+    std::fs::write(restart_path, restart_script)?;
+    let _ = Command::new("chmod").args(["+x", restart_path]).output()?;
+
+    let _ = Command::new("/bin/sh")
+        .arg(restart_path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
 
     Ok(report)
 }
