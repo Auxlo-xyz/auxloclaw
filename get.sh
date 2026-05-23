@@ -22,6 +22,22 @@ detect_platform() {
     echo "${arch}-${os}"
 }
 
+ensure_npm() {
+    if command -v npm &>/dev/null; then
+        return
+    fi
+    echo "==> npm not found. Installing Node.js..."
+    if command -v apt-get &>/dev/null; then
+        curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+        apt-get install -y nodejs
+    elif command -v brew &>/dev/null; then
+        brew install node
+    else
+        echo "Warning: Could not install Node.js automatically. Please install it manually (https://nodejs.org)."
+        return 1
+    fi
+}
+
 main() {
     local target
     target="$(detect_platform)"
@@ -39,8 +55,13 @@ main() {
     # Install agent-browser (Vercel) if missing
     if ! command -v agent-browser &>/dev/null; then
         echo "Installing agent-browser (by Vercel)..."
-        curl -fsSL https://media.zocomputer.com/install/agentbrowser2.sh | bash \
-            || echo "Warning: agent-browser install failed (manual: curl -fsSL https://media.zocomputer.com/install/agentbrowser2.sh | bash)"
+        if ensure_npm; then
+            npm install -g agent-browser \
+                && agent-browser install --with-deps \
+                || echo "Warning: agent-browser install failed (manual: npm install -g agent-browser && agent-browser install --with-deps)"
+        else
+            echo "Warning: agent-browser install failed (manual: npm install -g agent-browser && agent-browser install --with-deps)"
+        fi
     fi
 
     # Install webserp (multi-engine web search, no API key)
