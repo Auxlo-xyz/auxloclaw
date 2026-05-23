@@ -195,7 +195,7 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     };
     let auth_state = Arc::new(AuthState::new(auth_config));
 
-    info!("🦞 AUXLOCLAW v0.1.0 initializing...");
+    info!("🦞 AUXLOCLAW v{} initializing...", env!("CARGO_PKG_VERSION"));
 
     let start = Instant::now();
 

@@ -84,7 +84,11 @@ async fn run_update() -> Result<String, anyhow::Error> {
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("No download URL"))?;
 
-    // Step 5: download to temp file
+    // Step 5: stop
+    // Kill any auxloclaw process that is NOT the current updater process
+    // Use `pkill -f "auxloclaw gateway"` or find+kill.
+
+    // Step 6: download to temp file
     report.push_str(&format!("Downloading {asset_name}...\n"));
     let tmp_path = format!("{INSTALL_PATH}.tmp");
 
@@ -96,7 +100,7 @@ async fn run_update() -> Result<String, anyhow::Error> {
     let bytes = resp.bytes().await?;
     std::fs::write(&tmp_path, &bytes)?;
 
-    // Step 6: replace binary
+    // Step 7: replace binary
     report.push_str(&format!("Installing to {INSTALL_PATH}...\n"));
 
     let mv = Command::new("mv")
@@ -115,7 +119,7 @@ async fn run_update() -> Result<String, anyhow::Error> {
         .args(["+x", INSTALL_PATH])
         .output()?;
 
-    // Step 7: verify
+    // Step 8: verify
     let version = Command::new(INSTALL_PATH)
         .args(["--version"])
         .output()?;
@@ -123,6 +127,11 @@ async fn run_update() -> Result<String, anyhow::Error> {
     let ver = String::from_utf8_lossy(&version.stdout).trim().to_string();
     report.push_str(&format!("Installed: {ver}\n"));
     report.push_str("Update complete. Restart the gateway to use the new version.");
+
+    // Spawn `auxloclaw gateway` as a detached background process
+    let _pid = Command::new(INSTALL_PATH)
+        .args(["gateway"])
+        .spawn();
 
     Ok(report)
 }
