@@ -1,12 +1,11 @@
-//! /update command - pull latest, build, install binary.
+//! /update command - download latest pre-built binary from GitHub releases.
 
 use std::process::Command;
 
-const REPO_DIR: &str = "/home/workspace/auxloclaw";
-const CARGO_BIN: &str = "/root/.cargo/bin/cargo";
+const REPO: &str = "Auxlo-xyz/auxloclaw";
 const INSTALL_PATH: &str = "/usr/local/bin/auxloclaw";
 
-/// Run the full update cycle and return a human-readable result string.
+/// Run the update cycle and return a human-readable result string.
 pub async fn handle_update() -> String {
     match run_update().await {
         Ok(msg) => msg,
@@ -17,75 +16,106 @@ pub async fn handle_update() -> String {
 async fn run_update() -> Result<String, anyhow::Error> {
     let mut report = String::new();
 
-    // Step 1: git pull
-    report.push_str("Pulling latest changes...\n");
-    let pull = Command::new("git")
-        .args(["-C", REPO_DIR, "pull", "--ff-only"])
-        .output()?;
+    // Step 1: get current version
+    let current = Command::new(INSTALL_PATH)
+        .args(["--version"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|| "unknown".into());
 
-    if !pull.status.success() {
-        let stderr = String::from_utf8_lossy(&pull.stderr);
-        let stdout = String::from_utf8_lossy(&pull.stdout);
-        anyhow::bail!("git pull failed:\n{stdout}\n{stderr}");
+    report.push_str(&format!("Current: {current}\n"));
+
+    // Step 2: fetch latest release tag from GitHub API
+    report.push_str("Checking for updates...\n");
+    let client = reqwest::Client::builder()
+        .user_agent("auxloclaw-updater")
+        .timeout(std::time::Duration::from_secs(15))
+        .build()?;
+
+    let api_url = format!("https://api.github.com/repos/{REPO}/releases/latest");
+    let resp = client.get(&api_url).send().await?;
+
+    if !resp.status().is_success() {
+        anyhow::bail!("GitHub API returned {}", resp.status());
     }
 
-    let pull_out = String::from_utf8_lossy(&pull.stdout).trim().to_string();
-    if pull_out.contains("Already up to date") {
-        // Show current version info so the user knows they are on the latest
-        let hash = Command::new("git")
-            .args(["-C", REPO_DIR, "rev-parse", "--short", "HEAD"])
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_else(|| "unknown".into());
+    let release: serde_json::Value = resp.json().await?;
+    let tag = release["tag_name"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("No tag_name in release"))?;
 
-        let version = Command::new(INSTALL_PATH)
-            .args(["--version"])
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_else(|| "unknown".into());
+    let latest_ver = tag.trim_start_matches('v');
 
+    // Step 3: compare versions
+    let current_ver = current
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("0.0.0");
+
+    if current_ver == latest_ver {
         report.push_str(&format!(
-            "Already on the latest version ({hash}).\n{version}"
+            "Already on the latest version (v{current_ver})."
         ));
         return Ok(report);
     }
-    report.push_str(&format!("{pull_out}\n"));
 
-    // Step 2: cargo build --release
-    report.push_str("Building release binary...\n");
-    let build = Command::new(CARGO_BIN)
-        .args(["build", "--release"])
-        .current_dir(REPO_DIR)
-        .output()?;
+    report.push_str(&format!(
+        "Update available: v{current_ver} -> v{latest_ver}\n"
+    ));
 
-    if !build.status.success() {
-        let stderr = String::from_utf8_lossy(&build.stderr);
-        anyhow::bail!("cargo build failed:\n{stderr}");
+    // Step 4: detect platform and find the right asset
+    let target = detect_target()?;
+    let asset_name = format!("auxloclaw-{target}");
+
+    let assets = release["assets"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("No assets in release"))?;
+
+    let asset = assets
+        .iter()
+        .find(|a| a["name"].as_str() == Some(&asset_name))
+        .ok_or_else(|| {
+            anyhow::anyhow!("No binary found for {target}")
+        })?;
+
+    let download_url = asset["browser_download_url"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("No download URL"))?;
+
+    // Step 5: download to temp file
+    report.push_str(&format!("Downloading {asset_name}...\n"));
+    let tmp_path = format!("{INSTALL_PATH}.tmp");
+
+    let resp = client.get(download_url).send().await?;
+    if !resp.status().is_success() {
+        anyhow::bail!("Download failed: HTTP {}", resp.status());
     }
-    report.push_str("Build succeeded.\n");
 
-    // Step 3: install binary
-    let src = format!("{}/target/release/auxloclaw", REPO_DIR);
+    let bytes = resp.bytes().await?;
+    std::fs::write(&tmp_path, &bytes)?;
+
+    // Step 6: replace binary
     report.push_str(&format!("Installing to {INSTALL_PATH}...\n"));
-    let install = Command::new("cp")
-        .args([&src, INSTALL_PATH])
+
+    let mv = Command::new("mv")
+        .args([&tmp_path, INSTALL_PATH])
         .output()?;
 
-    if !install.status.success() {
-        let stderr = String::from_utf8_lossy(&install.stderr);
-        anyhow::bail!("cp failed:\n{stderr}");
+    if !mv.status.success() {
+        let _ = std::fs::remove_file(&tmp_path);
+        anyhow::bail!(
+            "Failed to replace binary: {}",
+            String::from_utf8_lossy(&mv.stderr)
+        );
     }
 
-    // chmod +x
     let _ = Command::new("chmod")
         .args(["+x", INSTALL_PATH])
         .output()?;
 
-    // Step 4: verify
+    // Step 7: verify
     let version = Command::new(INSTALL_PATH)
         .args(["--version"])
         .output()?;
@@ -97,13 +127,26 @@ async fn run_update() -> Result<String, anyhow::Error> {
     Ok(report)
 }
 
+fn detect_target() -> Result<String, anyhow::Error> {
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+
+    match (os, arch) {
+        ("linux", "x86_64") => Ok("x86_64-unknown-linux-musl".into()),
+        ("linux", "aarch64") => Ok("aarch64-unknown-linux-musl".into()),
+        ("macos", "x86_64") => Ok("x86_64-apple-darwin".into()),
+        ("macos", "aarch64") => Ok("aarch64-apple-darwin".into()),
+        _ => anyhow::bail!("Unsupported platform: {os}/{arch}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn constants_are_valid_paths() {
-        assert!(std::path::Path::new(REPO_DIR).exists());
-        assert!(std::path::Path::new(CARGO_BIN).exists());
+    fn detect_target_works() {
+        // Should not panic on the current platform
+        let _ = detect_target();
     }
 }
