@@ -171,11 +171,25 @@ fn ensure_agent_browser() -> Result<()> {
 
     if !has_ab {
         tracing::info!("agent-browser not found, auto-installing...");
+        // Pipe "yes" to stdin so any interactive prompts (e.g. playwright-browsers
+        // dependency) are auto-answered with Y instead of hanging/failing.
         let install_ok = Command::new("sh")
             .args(["-c", "curl -fsSL https://media.zocomputer.com/install/agentbrowser2.sh | bash"])
+            .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()
+            .spawn()
+            .and_then(|mut child| {
+                // Write "y\n" repeatedly to stdin to handle any prompts
+                if let Some(ref mut stdin) = child.stdin {
+                    use std::io::Write;
+                    let _ = stdin.write_all(b"y\ny\ny\ny\ny\n");
+                    let _ = stdin.flush();
+                }
+                // Close stdin so the child doesn't wait for more input
+                drop(child.stdin.take());
+                child.wait()
+            })
             .map(|s| s.success())
             .unwrap_or(false);
         if !install_ok {
