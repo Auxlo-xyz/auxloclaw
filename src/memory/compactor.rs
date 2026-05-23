@@ -152,8 +152,16 @@ impl Compactor {
                     summary.trim()
                 );
                 
-                // Remove old messages
-                session.messages.drain(0..original_count - keep_recent);
+                // Remove old messages BUT preserve the system prompt at position 0
+                let drain_start = if session.messages.first().map(|m| m.role.as_str()) == Some("system") {
+                    1
+                } else {
+                    0
+                };
+                let drain_end = original_count - keep_recent;
+                if drain_end > drain_start {
+                    session.messages.drain(drain_start..drain_end);
+                }
                 
                 // Build summary history message
                 let now = SystemTime::now()
@@ -168,15 +176,13 @@ impl Compactor {
                     tool_calls: None,
                 };
                 
-                // NEVER insert at position 0 -- that's where the system prompt lives.
-                // If the first message is a system message (the prompt), insert after it.
-                // Otherwise insert at the end (before user messages) to preserve ordering.
-                if session.messages.first().map(|m| m.role.as_str()) == Some("system") {
-                    session.messages.insert(1, summary_msg);
+                // Insert summary right after the system prompt (or at position 0 if none)
+                let insert_at = if session.messages.first().map(|m| m.role.as_str()) == Some("system") {
+                    1
                 } else {
-                    // No system prompt at position 0 -- append summary as first item
-                    session.messages.insert(0, summary_msg);
-                }
+                    0
+                };
+                session.messages.insert(insert_at, summary_msg);
                 
                 // Estimate tokens saved (rough: 4 chars per token)
                 let tokens_saved = (to_compact.iter()

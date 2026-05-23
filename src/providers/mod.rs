@@ -332,6 +332,23 @@ impl LLMProvider for OpenAICompatibleProvider {
 
         let mut req = request.clone();
         req.model = model_name.to_string();
+
+        // Ensure at least one system message exists at position 0
+        // Some providers (Google, DeepSeek, certain OpenRouter models) return HTTP 400 without it
+        if req.messages.first().map(|m| m.role.as_str()) != Some("system") {
+            req.messages.insert(0, Message {
+                role: "system".to_string(),
+                content: Some("You are a helpful assistant.".to_string()),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            });
+            tracing::warn!(
+                "Provider {} request missing system message -- injected default",
+                self.name
+            );
+        }
+
         let body = serde_json::to_value(&req)?;
 
         let msg_count = req.messages.len();
