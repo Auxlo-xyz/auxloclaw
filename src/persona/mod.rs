@@ -302,7 +302,7 @@ impl SystemPromptBuilder {
                 "- **Execute code** using the execute_code tool (Python, TypeScript, Shell)\n",
             );
             desc.push_str("- **Read and write files** anywhere on the system\n");
-            desc.push_str("- **Search the web** using DuckDuckGo (no API key required)\n");
+            desc.push_str("- **Search the web** using webserp (multi-engine: Google, DuckDuckGo, Brave, Yahoo, Mojeek, Startpage, Presearch. No API key required)\n");
             desc.push_str("- **Fetch full page content** via Lightpanda CDP engine\n");
             desc.push_str("- **Fetch tweets** from X/Twitter by ID\n\n");
             desc.push_str("You should proactively use these capabilities. Do NOT say you cannot do something if you have a tool for it.\n");
@@ -324,7 +324,7 @@ impl SystemPromptBuilder {
             "web_search" => {
                 formatted.push_str("  Usage: {\"tool\": \"web_search\", \"arguments\": {\"query\": \"search terms\", \"num_results\": 5}}\n");
                 formatted.push_str(
-                    "  - Searches the web using DuckDuckGo (no API key required)\n",
+                    "  - Searches the web using webserp (multi-engine, no API key required)\n",
                 );
                 formatted.push_str("  - Returns titles, URLs, and snippets\n");
                 formatted.push_str("  - Use for finding current information, news, or research\n");
