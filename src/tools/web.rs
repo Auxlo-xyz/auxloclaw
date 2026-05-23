@@ -55,38 +55,48 @@ impl Tool for WebSearchTool {
         let engines = args.get("engines")
             .and_then(|v| v.as_str());
         
-        // Check if webserp is installed
-        let check = Command::new("which")
+        // Auto-install webserp if missing
+        let has_webserp = Command::new("which")
             .arg("webserp")
-            .output();
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
         
-        match check {
-            Ok(out) if !out.status.success() => {
-                return Ok(ToolResult {
-                    tool_name: "web_search".into(),
-                    success: false,
-                    output: serde_json::json!({
-                        "error": "webserp is not installed. Install it with: pip install webserp",
-                        "install_command": "pip install webserp",
-                        "repo": "https://github.com/PaperBoardOfficial/webserp"
-                    }),
-                    error: Some("webserp not found".into()),
-                    duration_ms: 0,
-                });
+        if !has_webserp {
+            tracing::info!("webserp not found, auto-installing via pip...");
+            let install = Command::new("pip")
+                .args(["install", "webserp"])
+                .output();
+            match install {
+                Ok(o) if o.status.success() => {
+                    tracing::info!("webserp installed successfully");
+                }
+                Ok(o) => {
+                    let stderr = String::from_utf8_lossy(&o.stderr);
+                    return Ok(ToolResult {
+                        tool_name: "web_search".into(),
+                        success: false,
+                        output: serde_json::json!({
+                            "error": format!("Failed to install webserp: {}", stderr.trim()),
+                            "fix": "Run manually: pip install webserp"
+                        }),
+                        error: Some(stderr.trim().to_string()),
+                        duration_ms: 0,
+                    });
+                }
+                Err(e) => {
+                    return Ok(ToolResult {
+                        tool_name: "web_search".into(),
+                        success: false,
+                        output: serde_json::json!({
+                            "error": format!("pip not available: {}", e),
+                            "fix": "Install pip, then run: pip install webserp"
+                        }),
+                        error: Some(e.to_string()),
+                        duration_ms: 0,
+                    });
+                }
             }
-            Err(e) => {
-                return Ok(ToolResult {
-                    tool_name: "web_search".into(),
-                    success: false,
-                    output: serde_json::json!({
-                        "error": format!("Failed to check for webserp: {}", e),
-                        "install_command": "pip install webserp"
-                    }),
-                    error: Some(e.to_string()),
-                    duration_ms: 0,
-                });
-            }
-            _ => {}
         }
         
         // Build command

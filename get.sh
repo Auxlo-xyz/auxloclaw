@@ -55,7 +55,14 @@ main() {
     # Ensure websockets is available for lightpanda-cdp
     python3 -c "import websockets" 2>/dev/null || pip install websockets -q 2>/dev/null || true
 
+    # Install webserp (multi-engine web search, no API key)
+    if ! command -v webserp &>/dev/null; then
+        echo "Installing webserp (web search engine)..."
+        pip install webserp -q 2>/dev/null || echo "Warning: webserp install failed (manual: pip install webserp)"
+    fi
+
     echo "Browser engine: lightpanda (20MB memory, 10x faster than Chrome)"
+    echo "Web search: webserp (multi-engine, no API key)"
 }
 
 main "$@"
