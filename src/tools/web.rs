@@ -614,3 +614,149 @@ impl Tool for XFetchTool {
         })
     }
 }
+
+// =====================================================
+// WEB FETCH TOOL (lightpanda - 20MB memory, fast page reading)
+// =====================================================
+
+pub struct WebFetchTool;
+
+#[async_trait]
+impl Tool for WebFetchTool {
+    fn name(&self) -> &str { "web_fetch" }
+    fn description(&self) -> &str {
+        "Fetch a web page and return its content as markdown. Uses Lightpanda engine (20MB memory, 10x faster than Chrome). For reading page content, articles, documentation. No API key required."
+    }
+    
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "URL to fetch"
+                },
+                "wait_ms": {
+                    "type": "integer",
+                    "description": "Wait time in milliseconds for JS to finish (default: 5000)",
+                    "default": 5000
+                },
+                "strip": {
+                    "type": "string",
+                    "description": "What to strip: js, ui, css, full (default: full for clean text)",
+                    "enum": ["js", "ui", "css", "full"],
+                    "default": "full"
+                }
+            },
+            "required": ["url"]
+        })
+    }
+
+    async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
+        let url = args["url"].as_str()
+            .ok_or_else(|| anyhow!("Missing url parameter"))?;
+        
+        let wait_ms = args.get("wait_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(5000)
+            .to_string();
+        
+        let strip = args.get("strip")
+            .and_then(|v| v.as_str())
+            .unwrap_or("full");
+        
+        // Check if lightpanda is installed
+        let check = Command::new("which")
+            .arg("lightpanda")
+            .output();
+        
+        match check {
+            Ok(out) if !out.status.success() => {
+                return Ok(ToolResult {
+                    tool_name: "web_fetch".into(),
+                    success: false,
+                    output: serde_json::json!({
+                        "error": "lightpanda is not installed. Install with:",
+                        "install_command": "curl -L -o /usr/local/bin/lightpanda https://github.com/nicholasgasior/lightpanda/releases/latest/download/lightpanda-x86_64-linux && chmod +x /usr/local/bin/lightpanda",
+                        "repo": "https://github.com/nicholasgasior/lightpanda"
+                    }),
+                    error: Some("lightpanda not found".into()),
+                    duration_ms: 0,
+                });
+            }
+            Err(e) => {
+                return Ok(ToolResult {
+                    tool_name: "web_fetch".into(),
+                    success: false,
+                    output: serde_json::json!({
+                        "error": format!("Failed to check for lightpanda: {}", e),
+                    }),
+                    error: Some(e.to_string()),
+                    duration_ms: 0,
+                });
+            }
+            _ => {}
+        }
+        
+        let start = std::time::Instant::now();
+        
+        let output = Command::new("lightpanda")
+            .arg("fetch")
+            .arg(url)
+            .arg("--dump")
+            .arg("markdown")
+            .arg("--json")
+            .arg("--strip-mode")
+            .arg(strip)
+            .arg("--wait-ms")
+            .arg(&wait_ms)
+            .arg("--terminate-ms")
+            .arg("15000")
+            .output()
+            .map_err(|e| anyhow!("Failed to run lightpanda: {}", e))?;
+        
+        let duration_ms = start.elapsed().as_millis() as u64;
+        
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Ok(ToolResult {
+                tool_name: "web_fetch".into(),
+                success: false,
+                output: serde_json::json!({
+                    "error": format!("lightpanda fetch failed: {}", stderr.trim()),
+                    "url": url
+                }),
+                error: Some(stderr.trim().to_string()),
+                duration_ms,
+            });
+        }
+        
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        
+        // Parse JSON output from lightpanda
+        let parsed: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|_| serde_json::json!({"raw": stdout.to_string()}));
+        
+        let content = parsed.get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        
+        let status = parsed.get("http_status")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        
+        Ok(ToolResult {
+            tool_name: "web_fetch".into(),
+            success: status >= 200 && status < 400 && !content.is_empty(),
+            output: serde_json::json!({
+                "url": url,
+                "status": status,
+                "content": content,
+                "char_count": content.len(),
+                "duration_ms": duration_ms
+            }),
+            error: None,
+            duration_ms,
+        })
+    }
+}

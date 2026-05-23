@@ -72,9 +72,10 @@ impl ToolOrchestrator {
         // Register web tools
         use crate::tools::web::{
             BrowserClickTool, BrowserCloseTool, BrowserFillTool, BrowserGetTool, BrowserOpenTool,
-            BrowserScreenshotTool, BrowserSnapshotTool, WebSearchTool, XFetchTool,
+            BrowserScreenshotTool, BrowserSnapshotTool, WebSearchTool, WebFetchTool, XFetchTool,
         };
         self.register(Arc::new(WebSearchTool));
+        self.register(Arc::new(WebFetchTool));
         self.register(Arc::new(BrowserOpenTool));
         self.register(Arc::new(BrowserSnapshotTool));
         self.register(Arc::new(BrowserClickTool));
