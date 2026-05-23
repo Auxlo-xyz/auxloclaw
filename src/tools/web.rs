@@ -149,79 +149,58 @@ impl Tool for WebSearchTool {
 }
 
 // =====================================================
-// BROWSER TOOLS (uses agent-browser CLI)
+// BROWSER TOOLS (uses lightpanda-cdp - 20MB memory, no Chrome)
 // =====================================================
 
-fn check_agent_browser() -> Option<ToolResult> {
-    // First check if already installed
+fn find_cdp_script() -> String {
+    // Check common locations
+    let candidates = [
+        "/usr/local/lib/auxloclaw/lightpanda-cdp",
+        "/opt/auxloclaw/lightpanda-cdp",
+    ];
+    for path in &candidates {
+        if std::path::Path::new(path).exists() {
+            return path.to_string();
+        }
+    }
+    // Fall back to PATH
+    "lightpanda-cdp".to_string()
+}
+
+fn check_lightpanda() -> Option<ToolResult> {
     let check = Command::new("which")
-        .arg("agent-browser")
+        .arg("lightpanda")
         .output();
-    
     match check {
         Ok(out) if out.status.success() => return None,
         _ => {}
     }
-    
-    // Not found - attempt auto-install
-    tracing::info!("agent-browser not found, attempting auto-install...");
-    
-    let install = Command::new("bash")
-        .args(["-c", "curl -fsSL https://media.zocomputer.com/install/agentbrowser2.sh | bash"])
-        .output();
-    
-    match install {
-        Ok(out) if out.status.success() => {
-            // Verify it's now available
-            let verify = Command::new("which")
-                .arg("agent-browser")
-                .output();
-            match verify {
-                Ok(v) if v.status.success() => {
-                    tracing::info!("agent-browser auto-installed successfully");
-                    return None;
-                }
-                _ => {}
-            }
-        }
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            return Some(ToolResult {
-                tool_name: "browser".into(),
-                success: false,
-                output: serde_json::json!({
-                    "error": "agent-browser auto-install failed",
-                    "details": stderr.trim(),
-                    "manual_install": "curl -fsSL https://media.zocomputer.com/install/agentbrowser2.sh | bash"
-                }),
-                error: Some(stderr.trim().to_string()),
-                duration_ms: 0,
-            });
-        }
-        Err(e) => {
-            return Some(ToolResult {
-                tool_name: "browser".into(),
-                success: false,
-                output: serde_json::json!({
-                    "error": format!("Failed to run agent-browser installer: {}", e),
-                    "manual_install": "curl -fsSL https://media.zocomputer.com/install/agentbrowser2.sh | bash"
-                }),
-                error: Some(e.to_string()),
-                duration_ms: 0,
-            });
-        }
-    }
-    
     Some(ToolResult {
         tool_name: "browser".into(),
         success: false,
         output: serde_json::json!({
-            "error": "agent-browser is not available and auto-install did not succeed",
-            "manual_install": "curl -fsSL https://media.zocomputer.com/install/agentbrowser2.sh | bash"
+            "error": "lightpanda is not installed",
+            "install_command": "curl -L -o /usr/local/bin/lightpanda https://github.com/nicholasgasior/lightpanda/releases/latest/download/lightpanda-x86_64-linux && chmod +x /usr/local/bin/lightpanda",
+            "note": "Also requires: pip install websockets"
         }),
-        error: Some("agent-browser not found after install attempt".into()),
+        error: Some("lightpanda not found".into()),
         duration_ms: 0,
     })
+}
+
+fn run_cdp(args: &[&str]) -> Result<(bool, serde_json::Value)> {
+    let script = find_cdp_script();
+    let output = Command::new("python3")
+        .arg(&script)
+        .args(args)
+        .output()
+        .map_err(|e| anyhow!("Failed to run lightpanda-cdp: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|_| serde_json::json!({"raw": stdout.to_string()}));
+
+    Ok((output.status.success(), parsed))
 }
 
 pub struct BrowserOpenTool;
@@ -229,7 +208,9 @@ pub struct BrowserOpenTool;
 #[async_trait]
 impl Tool for BrowserOpenTool {
     fn name(&self) -> &str { "browser_open" }
-    fn description(&self) -> &str { "Open a URL in the browser for subsequent automation" }
+    fn description(&self) -> &str {
+        "Open a URL in the Lightpanda browser (20MB memory) for subsequent automation (click, fill, screenshot)"
+    }
     
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -242,28 +223,18 @@ impl Tool for BrowserOpenTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
-        if let Some(result) = check_agent_browser() { return Ok(result); }
+        if let Some(result) = check_lightpanda() { return Ok(result); }
         let url = args["url"].as_str()
             .ok_or_else(|| anyhow!("Missing url parameter"))?;
-        
-        let output = Command::new("agent-browser")
-            .arg("open")
-            .arg(url)
-            .output()
-            .map_err(|e| anyhow!("Failed to run agent-browser: {}", e))?;
-        
+        let start = std::time::Instant::now();
+        let (ok, data) = run_cdp(&["open", url])?;
+        let duration_ms = start.elapsed().as_millis() as u64;
         Ok(ToolResult {
             tool_name: self.name().into(),
-            success: output.status.success(),
-            output: serde_json::json!({
-                "url": url,
-                "success": output.status.success(),
-                "message": String::from_utf8_lossy(&output.stdout).to_string()
-            }),
-            error: if output.status.success() { None } else { 
-                Some(String::from_utf8_lossy(&output.stderr).to_string()) 
-            },
-            duration_ms: 0,
+            success: ok && data.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
+            output: data,
+            error: if ok { None } else { Some("browser_open failed".into()) },
+            duration_ms,
         })
     }
 }
@@ -273,46 +244,28 @@ pub struct BrowserSnapshotTool;
 #[async_trait]
 impl Tool for BrowserSnapshotTool {
     fn name(&self) -> &str { "browser_snapshot" }
-    fn description(&self) -> &str { "Get accessibility tree snapshot of current page with element refs (@e1, @e2, etc.) for interaction" }
+    fn description(&self) -> &str {
+        "Get accessibility tree snapshot of current page with element refs (@e1, @e2, etc.) for interaction via click or fill"
+    }
     
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
-            "properties": {
-                "interactive": { 
-                    "type": "boolean", 
-                    "description": "Only show interactive elements (default: true)",
-                    "default": true
-                }
-            }
+            "properties": {}
         })
     }
 
-    async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
-        if let Some(result) = check_agent_browser() { return Ok(result); }
-        let interactive = args.get("interactive")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-        
-        let mut cmd = Command::new("agent-browser");
-        cmd.arg("snapshot");
-        if interactive {
-            cmd.arg("-i");
-        }
-        
-        let output = cmd.output()
-            .map_err(|e| anyhow!("Failed to run agent-browser: {}", e))?;
-        
-        let snapshot = String::from_utf8_lossy(&output.stdout).to_string();
-        
+    async fn execute(&self, _args: serde_json::Value) -> Result<ToolResult> {
+        if let Some(result) = check_lightpanda() { return Ok(result); }
+        let start = std::time::Instant::now();
+        let (ok, data) = run_cdp(&["snapshot"])?;
+        let duration_ms = start.elapsed().as_millis() as u64;
         Ok(ToolResult {
             tool_name: self.name().into(),
-            success: output.status.success(),
-            output: serde_json::json!({
-                "snapshot": snapshot
-            }),
-            error: None,
-            duration_ms: 0,
+            success: ok && data.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
+            output: data,
+            error: if ok { None } else { Some("browser_snapshot failed".into()) },
+            duration_ms,
         })
     }
 }
@@ -322,40 +275,33 @@ pub struct BrowserClickTool;
 #[async_trait]
 impl Tool for BrowserClickTool {
     fn name(&self) -> &str { "browser_click" }
-    fn description(&self) -> &str { "Click an element by selector or @ref from snapshot" }
+    fn description(&self) -> &str {
+        "Click an element by CSS selector on the current page. Use browser_snapshot first to discover elements."
+    }
     
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "selector": { "type": "string", "description": "CSS selector or @ref (e.g., @e5)" }
+                "selector": { "type": "string", "description": "CSS selector (e.g., 'button', 'a.link', 'input[type=submit]')" }
             },
             "required": ["selector"]
         })
     }
 
     async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
-        if let Some(result) = check_agent_browser() { return Ok(result); }
+        if let Some(result) = check_lightpanda() { return Ok(result); }
         let selector = args["selector"].as_str()
             .ok_or_else(|| anyhow!("Missing selector parameter"))?;
-        
-        let output = Command::new("agent-browser")
-            .arg("click")
-            .arg(selector)
-            .output()
-            .map_err(|e| anyhow!("Failed to run agent-browser: {}", e))?;
-        
+        let start = std::time::Instant::now();
+        let (ok, data) = run_cdp(&["click", selector])?;
+        let duration_ms = start.elapsed().as_millis() as u64;
         Ok(ToolResult {
             tool_name: self.name().into(),
-            success: output.status.success(),
-            output: serde_json::json!({
-                "clicked": selector,
-                "success": output.status.success()
-            }),
-            error: if output.status.success() { None } else { 
-                Some(String::from_utf8_lossy(&output.stderr).to_string()) 
-            },
-            duration_ms: 0,
+            success: ok && data.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
+            output: data,
+            error: if ok { None } else { Some("browser_click failed".into()) },
+            duration_ms,
         })
     }
 }
@@ -365,13 +311,15 @@ pub struct BrowserFillTool;
 #[async_trait]
 impl Tool for BrowserFillTool {
     fn name(&self) -> &str { "browser_fill" }
-    fn description(&self) -> &str { "Fill text into an input field (clears first)" }
+    fn description(&self) -> &str {
+        "Fill text into an input field by CSS selector (clears existing value first). Triggers input/change events."
+    }
     
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "selector": { "type": "string", "description": "CSS selector or @ref" },
+                "selector": { "type": "string", "description": "CSS selector for the input field" },
                 "text": { "type": "string", "description": "Text to fill" }
             },
             "required": ["selector", "text"]
@@ -379,31 +327,20 @@ impl Tool for BrowserFillTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
-        if let Some(result) = check_agent_browser() { return Ok(result); }
+        if let Some(result) = check_lightpanda() { return Ok(result); }
         let selector = args["selector"].as_str()
             .ok_or_else(|| anyhow!("Missing selector parameter"))?;
         let text = args["text"].as_str()
             .ok_or_else(|| anyhow!("Missing text parameter"))?;
-        
-        let output = Command::new("agent-browser")
-            .arg("fill")
-            .arg(selector)
-            .arg(text)
-            .output()
-            .map_err(|e| anyhow!("Failed to run agent-browser: {}", e))?;
-        
+        let start = std::time::Instant::now();
+        let (ok, data) = run_cdp(&["fill", selector, text])?;
+        let duration_ms = start.elapsed().as_millis() as u64;
         Ok(ToolResult {
             tool_name: self.name().into(),
-            success: output.status.success(),
-            output: serde_json::json!({
-                "filled": selector,
-                "text_length": text.len(),
-                "success": output.status.success()
-            }),
-            error: if output.status.success() { None } else { 
-                Some(String::from_utf8_lossy(&output.stderr).to_string()) 
-            },
-            duration_ms: 0,
+            success: ok && data.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
+            output: data,
+            error: if ok { None } else { Some("browser_fill failed".into()) },
+            duration_ms,
         })
     }
 }
@@ -413,56 +350,37 @@ pub struct BrowserScreenshotTool;
 #[async_trait]
 impl Tool for BrowserScreenshotTool {
     fn name(&self) -> &str { "browser_screenshot" }
-    fn description(&self) -> &str { "Take a screenshot of the current page" }
+    fn description(&self) -> &str {
+        "Take a PNG screenshot of the current page"
+    }
     
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "path": { 
-                    "type": "string", 
+                "path": {
+                    "type": "string",
                     "description": "Path to save screenshot (default: /tmp/screenshot.png)",
                     "default": "/tmp/screenshot.png"
-                },
-                "full_page": {
-                    "type": "boolean",
-                    "description": "Capture full page (default: false)",
-                    "default": false
                 }
             }
         })
     }
 
     async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
-        if let Some(result) = check_agent_browser() { return Ok(result); }
+        if let Some(result) = check_lightpanda() { return Ok(result); }
         let path = args.get("path")
             .and_then(|v| v.as_str())
             .unwrap_or("/tmp/screenshot.png");
-        
-        let full_page = args.get("full_page")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        
-        let mut cmd = Command::new("agent-browser");
-        cmd.arg("screenshot").arg(path);
-        if full_page {
-            cmd.arg("--full-page");
-        }
-        
-        let output = cmd.output()
-            .map_err(|e| anyhow!("Failed to run agent-browser: {}", e))?;
-        
+        let start = std::time::Instant::now();
+        let (ok, data) = run_cdp(&["screenshot", path])?;
+        let duration_ms = start.elapsed().as_millis() as u64;
         Ok(ToolResult {
             tool_name: self.name().into(),
-            success: output.status.success(),
-            output: serde_json::json!({
-                "path": path,
-                "saved": output.status.success()
-            }),
-            error: if output.status.success() { None } else { 
-                Some(String::from_utf8_lossy(&output.stderr).to_string()) 
-            },
-            duration_ms: 0,
+            success: ok && data.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
+            output: data,
+            error: if ok { None } else { Some("browser_screenshot failed".into()) },
+            duration_ms,
         })
     }
 }
@@ -472,14 +390,16 @@ pub struct BrowserGetTool;
 #[async_trait]
 impl Tool for BrowserGetTool {
     fn name(&self) -> &str { "browser_get" }
-    fn description(&self) -> &str { "Get content from page: text, html, url, title" }
+    fn description(&self) -> &str {
+        "Get content from the current page: text, html, url, or title"
+    }
     
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "what": { 
-                    "type": "string", 
+                "what": {
+                    "type": "string",
                     "description": "What to get: text, html, url, title",
                     "enum": ["text", "html", "url", "title"]
                 }
@@ -489,28 +409,18 @@ impl Tool for BrowserGetTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
-        if let Some(result) = check_agent_browser() { return Ok(result); }
+        if let Some(result) = check_lightpanda() { return Ok(result); }
         let what = args["what"].as_str()
             .ok_or_else(|| anyhow!("Missing what parameter"))?;
-        
-        let output = Command::new("agent-browser")
-            .arg("get")
-            .arg(what)
-            .output()
-            .map_err(|e| anyhow!("Failed to run agent-browser: {}", e))?;
-        
-        let content = String::from_utf8_lossy(&output.stdout).to_string();
-        
+        let start = std::time::Instant::now();
+        let (ok, data) = run_cdp(&["get", what])?;
+        let duration_ms = start.elapsed().as_millis() as u64;
         Ok(ToolResult {
             tool_name: self.name().into(),
-            success: output.status.success(),
-            output: serde_json::json!({
-                what: content
-            }),
-            error: if output.status.success() { None } else { 
-                Some(String::from_utf8_lossy(&output.stderr).to_string()) 
-            },
-            duration_ms: 0,
+            success: ok && data.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
+            output: data,
+            error: if ok { None } else { Some("browser_get failed".into()) },
+            duration_ms,
         })
     }
 }
@@ -520,25 +430,24 @@ pub struct BrowserCloseTool;
 #[async_trait]
 impl Tool for BrowserCloseTool {
     fn name(&self) -> &str { "browser_close" }
-    fn description(&self) -> &str { "Close the browser session" }
+    fn description(&self) -> &str {
+        "Close the browser session and stop the Lightpanda server"
+    }
     
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({ "type": "object", "properties": {} })
     }
 
     async fn execute(&self, _args: serde_json::Value) -> Result<ToolResult> {
-        if let Some(result) = check_agent_browser() { return Ok(result); }
-        let output = Command::new("agent-browser")
-            .arg("close")
-            .output()
-            .map_err(|e| anyhow!("Failed to run agent-browser: {}", e))?;
-        
+        let start = std::time::Instant::now();
+        let (ok, data) = run_cdp(&["close"])?;
+        let duration_ms = start.elapsed().as_millis() as u64;
         Ok(ToolResult {
             tool_name: self.name().into(),
-            success: output.status.success(),
-            output: serde_json::json!({ "closed": true }),
+            success: ok,
+            output: data,
             error: None,
-            duration_ms: 0,
+            duration_ms,
         })
     }
 }

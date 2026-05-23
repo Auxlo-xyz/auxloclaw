@@ -35,6 +35,27 @@ main() {
     mv "/tmp/${BINARY}" "${INSTALL_DIR}/${BINARY}"
 
     echo "Installed: $(${BINARY} --version)"
+
+    # Install lightpanda browser engine if missing
+    if ! command -v lightpanda &>/dev/null; then
+        echo "Installing lightpanda browser engine..."
+        curl -fsSL -o /usr/local/bin/lightpanda \
+            "https://github.com/nicholasgasior/lightpanda/releases/latest/download/lightpanda-x86_64-linux" \
+            || echo "Warning: lightpanda install failed (manual: https://github.com/nicholasgasior/lightpanda)"
+        chmod +x /usr/local/bin/lightpanda 2>/dev/null || true
+    fi
+
+    # Install lightpanda-cdp helper script
+    mkdir -p /usr/local/lib/auxloclaw
+    curl -fsSL -o /usr/local/lib/auxloclaw/lightpanda-cdp \
+        "https://raw.githubusercontent.com/${REPO}/master/scripts/lightpanda-cdp" \
+        || echo "Warning: lightpanda-cdp install failed"
+    chmod +x /usr/local/lib/auxloclaw/lightpanda-cdp 2>/dev/null || true
+
+    # Ensure websockets is available for lightpanda-cdp
+    python3 -c "import websockets" 2>/dev/null || pip install websockets -q 2>/dev/null || true
+
+    echo "Browser engine: lightpanda (20MB memory, 10x faster than Chrome)"
 }
 
 main "$@"

@@ -1,0 +1,350 @@
+#!/usr/bin/env python3
+"""lightpanda-cdp: Thin CDP wrapper for Lightpanda interactive browsing.
+
+Usage:
+    lightpanda-cdp open <url> [--port PORT]
+    lightpanda-cdp click <selector> [--port PORT]
+    lightpanda-cdp fill <selector> <text> [--port PORT]
+    lightpanda-cdp screenshot <path> [--port PORT]
+    lightpanda-cdp snapshot [--port PORT]
+    lightpanda-cdp get <what> [--port PORT]
+    lightpanda-cdp close [--port PORT]
+
+Requires: lightpanda binary, websockets (pip install websockets)
+"""
+
+import asyncio
+import json
+import sys
+import base64
+import os
+import signal
+import time
+import subprocess
+
+DEFAULT_PORT = 9339
+PID_FILE = "/tmp/.lightpanda-cdp.pid"
+STATE_FILE = "/tmp/.lightpanda-cdp-state.json"
+
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    return {}
+
+
+def save_state(state):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f)
+
+
+def ensure_server(port):
+    """Start Lightpanda CDP server if not running. Returns PID."""
+    if os.path.exists(PID_FILE):
+        try:
+            with open(PID_FILE) as f:
+                pid = int(f.read().strip())
+            os.kill(pid, 0)
+            return pid
+        except (ProcessLookupError, ValueError):
+            try:
+                os.remove(PID_FILE)
+            except FileNotFoundError:
+                pass
+
+    proc = subprocess.Popen(
+        ["lightpanda", "serve", "--port", str(port), "--log-level", "warn"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    with open(PID_FILE, "w") as f:
+        f.write(str(proc.pid))
+    time.sleep(2)
+    return proc.pid
+
+
+async def cdp_send(ws, method, params=None, sid=None, timeout=15):
+    """Send CDP command and drain events until we get our response."""
+    if not hasattr(cdp_send, "msg_id"):
+        cdp_send.msg_id = 0
+    cdp_send.msg_id += 1
+    cmd = {"id": cdp_send.msg_id, "method": method}
+    if params:
+        cmd["params"] = params
+    if sid:
+        cmd["sessionId"] = sid
+    await ws.send(json.dumps(cmd))
+    target_id = cdp_send.msg_id
+    deadline = asyncio.get_event_loop().time() + timeout
+    while True:
+        remaining = deadline - asyncio.get_event_loop().time()
+        if remaining <= 0:
+            return {"error": {"message": "timeout"}}
+        try:
+            raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+            resp = json.loads(raw)
+            if resp.get("id") == target_id:
+                return resp
+        except asyncio.TimeoutError:
+            return {"error": {"message": "timeout"}}
+
+
+async def get_session(ws):
+    """Attach to first available target, return sessionId."""
+    resp = await cdp_send(ws, "Target.getTargets")
+    targets = resp.get("result", {}).get("targetInfos", [])
+    if not targets:
+        return None, None
+    tid = targets[0]["targetId"]
+    resp = await cdp_send(ws, "Target.attachToTarget",
+                          {"targetId": tid, "flatten": True})
+    sid = resp.get("result", {}).get("sessionId")
+    return tid, sid
+
+
+async def wait_ready(ws, sid, timeout=10):
+    """Wait for document.readyState == 'complete'."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        resp = await cdp_send(ws, "Runtime.evaluate",
+                              {"expression": "document.readyState"}, sid=sid, timeout=5)
+        state = resp.get("result", {}).get("result", {}).get("value")
+        if state == "complete":
+            return True
+        await asyncio.sleep(0.5)
+    return False
+
+
+async def do_open(url, port):
+    import websockets
+    ensure_server(port)
+    async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+        resp = await cdp_send(ws, "Target.createTarget", {"url": url})
+        tid = resp.get("result", {}).get("targetId")
+        if not tid:
+            print(json.dumps({"ok": False, "error": f"Failed to create target: {resp}"}))
+            return
+        resp = await cdp_send(ws, "Target.attachToTarget",
+                              {"targetId": tid, "flatten": True})
+        sid = resp.get("result", {}).get("sessionId")
+        await wait_ready(ws, sid)
+        resp = await cdp_send(ws, "Runtime.evaluate",
+                              {"expression": "document.title"}, sid=sid)
+        title = resp.get("result", {}).get("result", {}).get("value", "")
+        resp = await cdp_send(ws, "Runtime.evaluate",
+                              {"expression": "window.location.href"}, sid=sid)
+        final_url = resp.get("result", {}).get("result", {}).get("value", url)
+        save_state({"targetId": tid, "sessionId": sid, "url": final_url})
+        print(json.dumps({"ok": True, "targetId": tid, "title": title,
+                          "url": final_url}))
+
+
+async def do_click(selector, port):
+    import websockets
+    ensure_server(port)
+    async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+        tid, sid = await get_session(ws)
+        if not sid:
+            print(json.dumps({"ok": False, "error": "No open targets. Use 'open' first."}))
+            return
+
+        safe_sel = selector.replace("\\", "\\\\").replace("'", "\\'")
+        js = f"""(function(){{
+            var el = document.querySelector('{safe_sel}');
+            if(!el) return JSON.stringify({{ok:false, error:'Element not found: {safe_sel}'}});
+            var r = el.getBoundingClientRect();
+            return JSON.stringify({{ok:true, x:r.x+r.width/2, y:r.y+r.height/2, tag:el.tagName.toLowerCase(), text:(el.textContent||'').trim().substring(0,60)}});
+        }})()"""
+        resp = await cdp_send(ws, "Runtime.evaluate",
+                              {"expression": js, "returnByValue": True}, sid=sid)
+        val = resp.get("result", {}).get("result", {}).get("value", "{}")
+        info = json.loads(val)
+        if not info.get("ok"):
+            print(json.dumps(info))
+            return
+
+        x, y = info["x"], info["y"]
+        await cdp_send(ws, "Input.dispatchMouseEvent",
+                       {"type": "mousePressed", "x": x, "y": y,
+                        "button": "left", "clickCount": 1}, sid=sid)
+        await cdp_send(ws, "Input.dispatchMouseEvent",
+                       {"type": "mouseReleased", "x": x, "y": y,
+                        "button": "left", "clickCount": 1}, sid=sid)
+        await asyncio.sleep(1)
+        print(json.dumps({"ok": True, "clicked": selector, "x": x, "y": y}))
+
+
+async def do_fill(selector, text, port):
+    import websockets
+    ensure_server(port)
+    async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+        tid, sid = await get_session(ws)
+        if not sid:
+            print(json.dumps({"ok": False, "error": "No open targets"}))
+            return
+
+        safe_sel = selector.replace("\\", "\\\\").replace("'", "\\'")
+        safe_text = text.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+        js = f"""(function(){{
+            var el = document.querySelector('{safe_sel}');
+            if(!el) return JSON.stringify({{ok:false, error:'Element not found'}});
+            el.focus();
+            el.value = '{safe_text}';
+            el.dispatchEvent(new Event('input', {{bubbles:true}}));
+            el.dispatchEvent(new Event('change', {{bubbles:true}}));
+            return JSON.stringify({{ok:true, value:el.value}});
+        }})()"""
+        resp = await cdp_send(ws, "Runtime.evaluate",
+                              {"expression": js, "returnByValue": True}, sid=sid)
+        val = resp.get("result", {}).get("result", {}).get("value", "{}")
+        print(val)
+
+
+async def do_screenshot(path, port):
+    import websockets
+    ensure_server(port)
+    async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+        tid, sid = await get_session(ws)
+        if not sid:
+            print(json.dumps({"ok": False, "error": "No open targets"}))
+            return
+
+        resp = await cdp_send(ws, "Page.captureScreenshot",
+                              {"format": "png"}, sid=sid)
+        data = resp.get("result", {}).get("data")
+        if not data:
+            print(json.dumps({"ok": False, "error": "No screenshot data"}))
+            return
+        img = base64.b64decode(data)
+        d = os.path.dirname(path)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(img)
+        print(json.dumps({"ok": True, "path": path, "bytes": len(img)}))
+
+
+async def do_snapshot(port):
+    import websockets
+    ensure_server(port)
+    async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+        tid, sid = await get_session(ws)
+        if not sid:
+            print(json.dumps({"ok": False, "error": "No open targets"}))
+            return
+
+        js = """(function(){
+            var items = [];
+            var els = document.querySelectorAll('a, button, input, textarea, select, [role="button"], [onclick], [type="submit"]');
+            var idx = 0;
+            els.forEach(function(el){
+                if(el.offsetParent === null && el.tagName !== 'INPUT' && el.tagName !== 'SELECT') return;
+                var r = el.getBoundingClientRect();
+                if(r.width === 0 && r.height === 0) return;
+                idx++;
+                var tag = el.tagName.toLowerCase();
+                var text = (el.textContent || el.value || el.placeholder || '').trim().substring(0,80);
+                var type = el.getAttribute('type') || '';
+                var name = el.getAttribute('name') || '';
+                var href = el.getAttribute('href') || '';
+                items.push({
+                    ref: '@e'+idx, tag: tag, text: text,
+                    type: type, name: name, href: href,
+                    x: Math.round(r.x+r.width/2), y: Math.round(r.y+r.height/2)
+                });
+            });
+            return JSON.stringify({ok:true, count:items.length, elements:items});
+        })()"""
+        resp = await cdp_send(ws, "Runtime.evaluate",
+                              {"expression": js, "returnByValue": True}, sid=sid)
+        val = resp.get("result", {}).get("result", {}).get("value", '{"ok":false}')
+        print(val)
+
+
+async def do_get(what, port):
+    import websockets
+    ensure_server(port)
+    async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+        tid, sid = await get_session(ws)
+        if not sid:
+            print(json.dumps({"ok": False, "error": "No open targets"}))
+            return
+
+        expr_map = {
+            "text": "document.body?.innerText || ''",
+            "html": "document.body?.innerHTML || ''",
+            "url": "window.location.href",
+            "title": "document.title",
+        }
+        expr = expr_map.get(what)
+        if not expr:
+            print(json.dumps({"ok": False, "error": f"Unknown: {what}"}))
+            return
+        resp = await cdp_send(ws, "Runtime.evaluate",
+                              {"expression": expr, "returnByValue": True}, sid=sid)
+        val = resp.get("result", {}).get("result", {}).get("value", "")
+        print(json.dumps({"ok": True, what: val}))
+
+
+async def do_close(port):
+    if os.path.exists(PID_FILE):
+        try:
+            with open(PID_FILE) as f:
+                pid = int(f.read().strip())
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, ValueError):
+            pass
+        try:
+            os.remove(PID_FILE)
+        except FileNotFoundError:
+            pass
+    if os.path.exists(STATE_FILE):
+        os.remove(STATE_FILE)
+    print(json.dumps({"ok": True, "closed": True}))
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__, file=sys.stderr)
+        sys.exit(1)
+
+    cmd = sys.argv[1]
+    port = DEFAULT_PORT
+    if "--port" in sys.argv:
+        idx = sys.argv.index("--port")
+        port = int(sys.argv[idx + 1])
+
+    if cmd == "open":
+        if len(sys.argv) < 3:
+            print("Usage: lightpanda-cdp open <url>", file=sys.stderr)
+            sys.exit(1)
+        asyncio.run(do_open(sys.argv[2], port))
+    elif cmd == "click":
+        if len(sys.argv) < 3:
+            print("Usage: lightpanda-cdp click <selector>", file=sys.stderr)
+            sys.exit(1)
+        asyncio.run(do_click(sys.argv[2], port))
+    elif cmd == "fill":
+        if len(sys.argv) < 4:
+            print("Usage: lightpanda-cdp fill <selector> <text>", file=sys.stderr)
+            sys.exit(1)
+        asyncio.run(do_fill(sys.argv[2], sys.argv[3], port))
+    elif cmd == "screenshot":
+        path = sys.argv[2] if len(sys.argv) > 2 else "/tmp/screenshot.png"
+        asyncio.run(do_screenshot(path, port))
+    elif cmd == "snapshot":
+        asyncio.run(do_snapshot(port))
+    elif cmd == "get":
+        what = sys.argv[2] if len(sys.argv) > 2 else "text"
+        asyncio.run(do_get(what, port))
+    elif cmd == "close":
+        asyncio.run(do_close(port))
+    else:
+        print(f"Unknown command: {cmd}", file=sys.stderr)
+        print(__doc__, file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
