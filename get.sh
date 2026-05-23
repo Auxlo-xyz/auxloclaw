@@ -36,34 +36,12 @@ main() {
 
     echo "Installed: $(${BINARY} --version)"
 
-    # Install lightpanda browser engine if missing
-    if ! command -v lightpanda &>/dev/null; then
-        echo "Installing lightpanda browser engine..."
-        local lp_arch="$(uname -m)"
-        case "$lp_arch" in
-            x86_64)  lp_arch="x86_64" ;;
-            aarch64|arm64) lp_arch="aarch64" ;;
-        esac
-        local lp_os="$(uname -s)"
-        case "$lp_os" in
-            Linux)  lp_os="linux" ;;
-            Darwin) lp_os="macos" ;;
-        esac
-        curl -fsSL -o /usr/local/bin/lightpanda \
-            "https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-${lp_arch}-${lp_os}" \
-            || echo "Warning: lightpanda install failed (manual: https://github.com/lightpanda-io/browser)"
-        chmod +x /usr/local/bin/lightpanda 2>/dev/null || true
+    # Install agent-browser (Vercel) if missing
+    if ! command -v agent-browser &>/dev/null; then
+        echo "Installing agent-browser (by Vercel)..."
+        curl -fsSL https://media.zocomputer.com/install/agentbrowser2.sh | bash \
+            || echo "Warning: agent-browser install failed (manual: curl -fsSL https://media.zocomputer.com/install/agentbrowser2.sh | bash)"
     fi
-
-    # Install lightpanda-cdp helper script
-    mkdir -p /usr/local/lib/auxloclaw
-    curl -fsSL -o /usr/local/lib/auxloclaw/lightpanda-cdp \
-        "https://raw.githubusercontent.com/${REPO}/master/scripts/lightpanda-cdp" \
-        || echo "Warning: lightpanda-cdp install failed"
-    chmod +x /usr/local/lib/auxloclaw/lightpanda-cdp 2>/dev/null || true
-
-    # Ensure websockets is available for lightpanda-cdp
-    python3 -c "import websockets" 2>/dev/null || pip install websockets -q 2>/dev/null || true
 
     # Install webserp (multi-engine web search, no API key)
     if ! command -v webserp &>/dev/null; then
@@ -71,7 +49,7 @@ main() {
         pip install webserp -q 2>/dev/null || echo "Warning: webserp install failed (manual: pip install webserp)"
     fi
 
-    echo "Browser engine: lightpanda (20MB memory, 10x faster than Chrome)"
+    echo "Browser: agent-browser (by Vercel)"
     echo "Web search: webserp (multi-engine, no API key)"
 }
 

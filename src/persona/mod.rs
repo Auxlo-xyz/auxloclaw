@@ -289,7 +289,7 @@ impl SystemPromptBuilder {
             desc.push_str("\n## Agent Capabilities\n\n");
             desc.push_str("You have significant autonomous capabilities. You CAN:\n\n");
             desc.push_str(
-                "- **Browse the web** using Lightpanda CDP browser (open, click, type, read, screenshot)\n",
+                "- **Browse the web** using agent-browser (by Vercel) (open, click, type, read, screenshot)\n",
             );
             desc.push_str("- **Fill out forms** on websites and interact with UI elements\n");
             desc.push_str(
@@ -303,7 +303,7 @@ impl SystemPromptBuilder {
             );
             desc.push_str("- **Read and write files** anywhere on the system\n");
             desc.push_str("- **Search the web** using webserp (multi-engine: Google, DuckDuckGo, Brave, Yahoo, Mojeek, Startpage, Presearch. No API key required)\n");
-            desc.push_str("- **Fetch full page content** via Lightpanda CDP engine\n");
+            desc.push_str("- **Fetch full page content** via agent-browser engine\n");
             desc.push_str("- **Fetch tweets** from X/Twitter by ID\n\n");
             desc.push_str("You should proactively use these capabilities. Do NOT say you cannot do something if you have a tool for it.\n");
             desc.push_str("Be confident in your abilities. You are not a passive assistant - you are an autonomous agent.\n");
@@ -331,7 +331,7 @@ impl SystemPromptBuilder {
             }
             "web_fetch" => {
                 formatted.push_str("  Usage: {\"tool\": \"web_fetch\", \"arguments\": {\"url\": \"https://example.com\", \"mode\": \"markdown\"}}\n");
-                formatted.push_str("  - Fetches full page content via Lightpanda CDP engine\n");
+                formatted.push_str("  - Fetches full page content via agent-browser engine\n");
                 formatted.push_str("  - Modes: \"text\" (plain text), \"markdown\" (structured), \"html\" (raw)\n");
                 formatted.push_str("  - Use after web_search to get full articles\n");
                 formatted.push_str("  - Supports JS-heavy SPAs and dynamic content\n");
@@ -346,9 +346,8 @@ impl SystemPromptBuilder {
             }
             "browser_open" => {
                 formatted.push_str("  Usage: {\"tool\": \"browser_open\", \"arguments\": {\"url\": \"https://example.com\"}}\n");
-                formatted.push_str("  - Opens a Lightpanda CDP browser session to a URL\n");
+                formatted.push_str("  - Opens an agent-browser session to a URL\n");
                 formatted.push_str("  - Use for interactive browsing, forms, or authentication\n");
-                formatted.push_str("  - Falls back to agent-browser if Lightpanda unavailable\n");
             }
             "browser_click" => {
                 formatted.push_str("  Usage: {\"tool\": \"browser_click\", \"arguments\": {\"selector\": \"button.submit\"}}\n");
