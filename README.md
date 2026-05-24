@@ -1,17 +1,53 @@
 # AUXLOCLAW
 
-<div align="center">
-
 **Ultra-High-Performance AI Agent Framework**
 
-[![Rust](https://img.shields.io/badge/rust-1.95%2B-orange.svg)](https://www.rust-lang.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+![Rust](https://img.shields.io/badge/rust-1.95%2B-orange.svg)
 
-</div>
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
 ---
 
-## Install
+## Introduction
+
+AUXLOCLAW is a high-performance, Rust-native AI agent framework designed for building intelligent, autonomous systems that can plan, execute, and interact across multiple channels. It combines zero-cost abstractions, parallel tool execution, and multi-provider support to deliver real-time responses with minimal latency.
+
+Key architectural choices include:
+
+- **Rust native** -- zero-cost abstractions, no GC pauses
+- **DAG tool execution** -- independent tools run in parallel
+- **3-tier memory** -- LRU cache + SQLite + vector search
+- **Multi-provider** -- NVIDIA, OpenAI, Anthropic, OpenRouter, Groq, and more
+- **Skill system** -- compatible with [agentskills.io](https://agentskills.io)
+- **Zero-copy streaming** -- direct SSE passthrough for real-time responses
+- **Multi-channel** -- Telegram, Discord, and HTTP API with optional bearer auth
+- **MCP client** -- connect to stdio MCP servers and use their tools
+- **Planner DAG** -- structured task planning with auditable run database
+- **Plugin hooks** -- lifecycle event system for external plugins
+- **Cron scheduler** -- autonomous recurring jobs inside the gateway
+- **Context pruning** -- smart conversation history management
+- **Persona system** -- customizable agent personality and behavior
+- **Code mode** -- isolated coding agent with its own workspace
+
+---
+
+## Concepts You'll Need
+
+AUXLOCLAW operates on a core mental model where the agent:
+
+**Planning and execution.** The agent uses a structured DAG (Directed Acyclic Graph) to plan tasks, breaking down goals into actionable steps. It executes tools in parallel when possible to maximize efficiency.
+
+**Memory and context.** The agent remembers context across sessions using a 3-tier memory system: a fast LRU cache for recent data, SQLite for persistent storage, and vector search for semantic retrieval.
+
+**Adaptation and behavior.** The agent adapts its behavior through persona and skill configurations, allowing it to customize its personality and capabilities for different tasks.
+
+**Streaming and interaction.** The agent streams responses in real-time via Server-Sent Events (SSE) for low-latency interaction, enabling smooth, conversational exchanges.
+
+---
+
+## Getting Started in 5 Minutes
+
+### 1. Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Auxlo-xyz/auxloclaw/master/get.sh | bash
@@ -19,23 +55,63 @@ curl -fsSL https://raw.githubusercontent.com/Auxlo-xyz/auxloclaw/master/get.sh |
 
 Downloads a pre-built static binary for your platform (Linux or macOS, x86_64 or aarch64). No Rust required.
 
----
+### 2. Configure a provider
 
-## Quick Start
+AUXLOCLAW works with any OpenAI-compatible endpoint. Pick one:
+
+**NVIDIA NIM (free tier available at build.nvidia.com):**
+```bash
+export NVIDIA_API_KEY="nvapi-..."
+```
+
+**OpenRouter (any model, pay-per-token):**
+```bash
+export OPENROUTER_API_KEY="sk-or-v1-..."
+```
+
+**Any custom endpoint:**
+```bash
+export OPENAI_API_KEY="your-key"
+# Then edit ~/.auxloclaw/config.toml and set:
+# api_base = "https://your-endpoint/v1"
+```
+
+### 3. First chat
 
 ```bash
-# Interactive setup wizard
-auxloclaw setup
+auxloclaw chat "What's the capital of France?"
+```
 
-# Set your API key
-export NVIDIA_API_KEY=your-key-here
+The agent responds immediately. Each message stays in a session -- quit and restart, the conversation continues.
 
-# Chat
-auxloclaw chat "Hello"
+### 4. Start the gateway (persistent agent)
 
-# Start the gateway server
+```bash
 auxloclaw gateway
 ```
+
+This starts AUXLOCLAW as a server on port 18789. From here you can:
+- Connect Telegram/Discord bots
+- Call the HTTP API from other apps
+- Run scheduled cron jobs
+- Let autonomous tasks execute in the background
+
+### 5. Connect Telegram (optional, 2 minutes)
+
+```toml
+# Add to ~/.auxloclaw/config.toml:
+[channels.telegram]
+enabled = true
+# Set token via env var: export TELEGRAM_BOT_TOKEN="..."
+```
+
+Create a bot via [@BotFather](https://t.me/BotFather), paste the token, restart the gateway. Message your bot and AUXLOCLAW responds.
+
+### What next?
+
+- `auxloclaw skill search <keyword>` -- install community skills (web scrapers, automation workflows)
+- `auxloclaw code "fix the login bug"` -- spawn an isolated coding agent with its own workspace
+- `/model list` in chat -- switch to any model mid-conversation
 
 ---
 
@@ -58,10 +134,29 @@ auxloclaw gateway
 
 ---
 
+## Daily Usage
+
+The commands you'll actually use day to day:
+
+```bash
+# Check system status
+auxloclaw status
+
+# Install a skill from the registry
+auxloclaw skill search stock
+auxloclaw skill install stock-analyzer
+
+# Switch model mid-session
+/model list          # in chat
+/model
+```
+
+---
+
 ## CLI Commands
 
 | Command | Description |
-|---------|-------------|
+| --- | --- |
 | `auxloclaw gateway` | Start the gateway server (default port 18789) |
 | `auxloclaw chat [message]` | Chat with the agent (interactive REPL or one-shot) |
 | `auxloclaw setup` | Interactive setup wizard |
@@ -83,7 +178,7 @@ auxloclaw gateway
 ### In-Chat Commands
 
 | Command | Description |
-|---------|-------------|
+| --- | --- |
 | `/token` | Set/list/remove/get/forget API keys |
 | `/mcp` | Add/remove/list/enable/disable MCP servers |
 | `/model` | Switch LLM model per session |
@@ -105,7 +200,7 @@ auxloclaw gateway --port 8080
 **Authentication**: Off by default. Set `AUXLOCLAW_REQUIRE_AUTH=true` and `AUXLOCLAW_API_KEY=<secret>` to require bearer auth on all routes except `/health`.
 
 | Endpoint | Method | Description |
-|----------|--------|-------------|
+| --- | --- | --- |
 | `/health` | GET | Health check |
 | `/chat` | POST | Chat with AUXLOCLAW |
 | `/stream` | POST | Streaming chat (SSE) |
@@ -120,7 +215,7 @@ auxloclaw gateway --port 8080
 
 ## Configuration
 
-Config file: `~/.auxloclaw/config.toml`
+Config file: `file ~/.auxloclaw/config.toml`
 
 ```toml
 [agent]
@@ -156,7 +251,7 @@ port = 18789
 ### Environment Variables
 
 | Variable | Description |
-|----------|-------------|
+| --- | --- |
 | `NVIDIA_API_KEY` | NVIDIA API key |
 | `OPENAI_API_KEY` | OpenAI API key |
 | `ANTHROPIC_API_KEY` | Anthropic API key |
@@ -186,7 +281,7 @@ timeout_secs = 30
 ```
 
 | Field | Description |
-|-------|-------------|
+| --- | --- |
 | `name` | Unique server name |
 | `command` | Stdio MCP server command |
 | `args` | Command arguments |
@@ -280,7 +375,7 @@ auxloclaw runs show <run-id>
 
 Skills are markdown-based instruction sets compatible with [agentskills.io](https://agentskills.io/specification).
 
-```
+```markdown
 skill-name/
 ├── SKILL.md          # Required: metadata + instructions
 ├── scripts/          # Optional: executable code
@@ -304,7 +399,7 @@ Instructions for the AI agent...
 
 ## Architecture
 
-```
+```markdown
 ┌─────────────────────────────────────────────────────────┐
 │                      AgentCore                          │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │
@@ -328,28 +423,49 @@ Instructions for the AI agent...
 ## Performance
 
 | Metric | Value |
-|--------|-------|
-| Binary Size | ~21 MB |
-| Startup Time | ~12ms |
-| Chat Latency | <100ms |
-| First Stream Token | <200ms |
+| --- | --- |
+| Binary Size | \~21 MB |
+| Startup Time | \~12ms |
+| Chat Latency | &lt;100ms |
+| First Stream Token | &lt;200ms |
 | Tests | 71 passing |
-| Lines of Rust | ~17,700 |
+| Lines of Rust | \~17,700 |
 
 ---
 
 ## Roadmap
 
 - [ ] More MCP server integrations (filesystem, Brave search, memory, fetch, postgres)
+
 - [ ] Provider-specific request adapters (Anthropic, Gemini, Cohere native formats)
+
 - [ ] Rate limiting and retry with exponential backoff
+
 - [ ] Streaming partial tool call reassembly
+
 - [ ] Accurate token counting (tiktoken-rs integration)
+
 - [ ] Multi-user / multi-session support
+
 - [ ] Web UI dashboard
+
 - [ ] Voice input/output (Whisper STT + TTS)
+
 - [ ] Docker support
+
 - [ ] Webhook support for external service integrations
+
+---
+
+## Troubleshooting
+
+### "System message must be at the beginning" (after upgrade to v0.4.7)
+
+Fixed in v0.4.7. This occurred when conversation compaction inserted a mid-conversation system message that some providers reject. Run `/update` to get the fix.
+
+### API key not found
+
+AUXLOCLAW checks environment variables in order:
 
 ---
 
@@ -369,8 +485,4 @@ MIT License - see [LICENSE](LICENSE) file.
 
 ---
 
-<div align="center">
-
 **Built with love by [Auxlo.xyz](https://auxlo.xyz)**
-
-</div>
