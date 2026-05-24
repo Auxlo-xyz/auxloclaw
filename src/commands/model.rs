@@ -143,9 +143,24 @@ pub fn handle_callback(
                 let provider_id = parts.get(2).copied().unwrap_or("custom");
                 let provider = find_provider(provider_id).unwrap_or(&PROVIDERS[6]); // default to custom
 
-                // Save provider type + default base URL
                 let mut ov = store.get(channel, user_id)?.unwrap_or_default();
                 ov.provider_type = Some(provider_id.to_string());
+
+                if provider_id == "custom" {
+                    // Custom endpoints need more info: sub-type + base URL
+                    ov.base_url = None; // clear - user must provide
+                    ov.updated_at = now_secs();
+                    store.set(channel, user_id, &ov)?;
+
+                    // Show sub-type keyboard: OpenAI-compatible vs Anthropic
+                    let keyboard_json = custom_subtype_keyboard_json();
+                    let msg = format!(
+                        "**Custom Endpoint selected.**\n\n\
+                         First, choose the API format your endpoint speaks:"
+                    );
+                    return Ok((msg, Some(keyboard_json), false));
+                }
+
                 ov.base_url = Some(provider.default_base.to_string());
                 ov.updated_at = now_secs();
                 store.set(channel, user_id, &ov)?;
@@ -153,7 +168,8 @@ pub fn handle_callback(
                 let msg = format!(
                     "**{} selected.**\n\n\
                      Send your API key:\n```\n/model key YOUR_KEY\n```\n\n\
-                     Key format: `{}`\nAuth: `{}`\n\n\
+                     Key format: `{}`\n\
+                     Auth: `{}`\n\n\
                      Security: Keys are AES-256-GCM encrypted at rest.",
                     provider.name, provider.key_prefix_hint, provider.auth_header
                 );
@@ -168,6 +184,26 @@ pub fn handle_callback(
                 }
             }
             Some(&"cancel") => Ok(("Cancelled.".into(), None, true)),
+            Some(&"custom_subtype") => {
+                // User chose OpenAI-compatible or Anthropic format for a custom endpoint
+                let sub = parts.get(2).copied().unwrap_or("openai-compatible");
+                let label = if sub == "anthropic" { "Anthropic-style" } else { "OpenAI-compatible" };
+
+                let mut ov = store.get(channel, user_id)?.unwrap_or_default();
+                ov.provider_type = Some(format!("custom/{}", sub));
+                ov.base_url = None;
+                ov.updated_at = now_secs();
+                store.set(channel, user_id, &ov)?;
+
+                let msg = format!(
+                    "**{label} API format selected.**\n\n\
+                     Now set your endpoint, key, and model:\n\n\
+                     ```\n/model url https://your-api.example.com/v1\n\
+                     /model key YOUR_KEY\n\
+                     /model id MODEL_NAME\n```"
+                );
+                Ok((msg, None, true))
+            }
             _ => Ok((format_help(), None, true)),
         },
         _ => Ok((format_help(), None, true)),
@@ -235,9 +271,27 @@ pub fn handle_model(
 
             let masked = mask_key(key);
             Ok(format!(
-                "API key saved: {}\nNext: /model id MODEL_NAME (e.g., /model id gpt-4o)",
+                "API key saved: {}\nNext: /model url https://your-api.example.com/v1 (if not set) | /model id MODEL_NAME",
                 masked
             ))
+        }
+        ["url", rest, ..] => {
+            let url = rest.trim();
+            if url.is_empty() || (!url.starts_with("http://") && !url.starts_with("https://")) {
+                return Ok("Please provide a valid URL: /model url https://your-api.example.com/v1".into());
+            }
+
+            let mut ov = store.get(channel, user_id)?.unwrap_or_default();
+            ov.base_url = Some(url.to_string());
+            ov.updated_at = now_secs();
+            store.set(channel, user_id, &ov)?;
+
+            let next = if ov.encrypted_api_key.is_some() {
+                "Next: /model id MODEL_NAME".to_string()
+            } else {
+                "Next: /model key YOUR_KEY".to_string()
+            };
+            Ok(format!("Base URL set to: {}\n{}", url, next))
         }
         ["id", rest, ..] => {
             let model_id = rest.trim();
@@ -276,6 +330,7 @@ fn show_current(store: &ModelStore, channel: &str, user_id: &str) -> Result<Stri
              {}\n\n\
              Or use text commands:\n\
              /model provider openai\n\
+             /model url https://api.example.com/v1\n\
              /model key sk-xxx\n\
              /model id gpt-4o\n\
              /model reset",
@@ -307,7 +362,7 @@ fn build_summary(channel: &str, user_id: &str, ov: &UserModelOverride) -> String
          - Model: {}\n\
          - Base URL: {}\n\
          - API Key: {}\n\n\
-         Change: /model provider <type> | /model key <k> | /model id <id>\n\
+         Change: /model provider <type> | /model url <url> | /model key <k> | /model id <id>\n\
          Reset: /model reset",
         channel,
         user_id,
@@ -322,6 +377,7 @@ fn format_help() -> String {
     format!(
         "Usage:\n\
          /model provider openai|anthropic|google|openrouter|groq|deepseek|custom\n\
+         /model url https://your-api.example.com/v1\n\
          /model key YOUR_API_KEY\n\
          /model id MODEL_ID\n\
          /model reset\n\n\
@@ -368,6 +424,15 @@ fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn custom_subtype_keyboard_json() -> String {
+    let rows = vec![
+        r#"[{"text": " OpenAI-compatible (/v1/chat/completions)", "callback_data": "model:custom_subtype:openai-compatible"}]"#,
+        r#"[{"text": " Anthropic-style (/v1/messages)", "callback_data": "model:custom_subtype:anthropic"}]"#,
+        r#"[{"text": " Cancel", "callback_data": "model:cancel"}]"#,
+    ];
+    format!(r#"{{"inline_keyboard": [{}]}}"#, rows.join(", "))
 }
 
 #[cfg(test)]
@@ -452,5 +517,15 @@ mod tests {
     fn test_mask_key() {
         assert_eq!(mask_key("sk-1234567890"), "sk-1***7890");
         assert_eq!(mask_key("short"), "shor***");
+    }
+
+    #[test]
+    fn url_command_sets_base_url() {
+        let store = temp_store();
+        let resp = handle_model(&store, "telegram", "6", "url https://example.com/v1").unwrap();
+        assert!(resp.contains("Base URL set to: https://example.com/v1"));
+
+        let ov = store.get("telegram", "6").unwrap().unwrap();
+        assert_eq!(ov.base_url.as_deref(), Some("https://example.com/v1"));
     }
 }
