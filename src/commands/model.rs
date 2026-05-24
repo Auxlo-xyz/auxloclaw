@@ -1,23 +1,180 @@
 //! /model command - Per-user model and provider override
 //!
-//! Usage:
-//!   /model                     - Show current override
-//!   /model <model_id>          - Set model ID only
-//!   /model base <url>          - Set base URL only
-//!   /model key <api_key>       - Set API key only (encrypted at rest)
-//!   /model base <url> key <k>  - Set base URL + key
-//!   /model <model_id> base <url> key <k> - Set all three
+//! Interactive flow on Telegram (with inline keyboards):
+//!   /model                     - Show inline keyboard with provider types
+//!   > Select provider          - Ask for API key
+//!   > Enter API key            - Ask for model ID
+//!   > Enter model ID           - Done, show summary
+//!
+//! Text-based usage (Discord / direct):
+//!   /model provider <type>     - Set provider type (openai, anthropic, google, openrouter, groq, deepseek, custom)
+//!   /model key <api_key>       - Set API key (encrypted at rest)
+//!   /model id <model_id>       - Set model ID
 //!   /model reset               - Clear override, revert to defaults
+//!   /model                     - Show current override + provider type buttons
 
 use crate::memory::model_store::{ModelStore, UserModelOverride};
 use anyhow::Result;
-use std::sync::Arc;
 
-/// Parse and handle the /model command.
-///
-/// `channel` is "telegram" or "discord"
-/// `user_id` is the platform-specific user identifier
-/// `args` is everything after "/model" trimmed
+/// Provider info displayed in the inline keyboard.
+#[derive(Debug, Clone)]
+pub struct ProviderInfo {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub default_base: &'static str,
+    pub auth_header: &'static str,
+    pub key_prefix_hint: &'static str,
+}
+
+/// Known providers with their canonical settings.
+pub const PROVIDERS: &[ProviderInfo] = &[
+    ProviderInfo {
+        id: "openai",
+        name: "OpenAI / Azure",
+        default_base: "https://api.openai.com/v1",
+        auth_header: "Authorization: Bearer",
+        key_prefix_hint: "sk-...",
+    },
+    ProviderInfo {
+        id: "anthropic",
+        name: "Anthropic Claude",
+        default_base: "https://api.anthropic.com/v1/messages",
+        auth_header: "x-api-key",
+        key_prefix_hint: "sk-ant-...",
+    },
+    ProviderInfo {
+        id: "google",
+        name: "Google Gemini",
+        default_base: "https://generativelanguage.googleapis.com/v1beta",
+        auth_header: "?key= (query param)",
+        key_prefix_hint: "AIza...",
+    },
+    ProviderInfo {
+        id: "openrouter",
+        name: "OpenRouter",
+        default_base: "https://openrouter.ai/api/v1",
+        auth_header: "Authorization: Bearer",
+        key_prefix_hint: "sk-or-...",
+    },
+    ProviderInfo {
+        id: "groq",
+        name: "Groq",
+        default_base: "https://api.groq.com/openai/v1",
+        auth_header: "Authorization: Bearer",
+        key_prefix_hint: "gsk_...",
+    },
+    ProviderInfo {
+        id: "deepseek",
+        name: "DeepSeek",
+        default_base: "https://api.deepseek.com/v1",
+        auth_header: "Authorization: Bearer",
+        key_prefix_hint: "sk-...",
+    },
+    ProviderInfo {
+        id: "custom",
+        name: "Custom Endpoint",
+        default_base: "https://your-api.example.com/v1",
+        auth_header: "Authorization: Bearer",
+        key_prefix_hint: "your-key",
+    },
+];
+
+/// Build an inline keyboard markup for provider type selection (Telegram-flavored JSON).
+/// Returns a serialized JSON string that the Telegram adapter can include in `reply_markup`.
+pub fn provider_keyboard_json() -> String {
+    // 2 columns, 7 providers -> 4 rows
+    let mut rows: Vec<String> = Vec::new();
+
+    for chunk in PROVIDERS.chunks(2) {
+        let buttons: Vec<String> = chunk
+            .iter()
+            .map(|p| {
+                format!(
+                    r#"{{"text": "{} {}", "callback_data": "model:provider:{}"}}"#,
+                    emoji_for(p.id),
+                    p.name,
+                    p.id
+                )
+            })
+            .collect();
+        rows.push(format!(r#"[{}]"#, buttons.join(", ")));
+    }
+
+    // Cancel / Reset row
+    rows.push(
+        r#"[{"text": "Reset Override", "callback_data": "model:reset"}, {"text": "Cancel", "callback_data": "model:cancel"}]"#
+            .to_string(),
+    );
+
+    format!(r#"{{"inline_keyboard": [{}]}}"#, rows.join(", "))
+}
+
+fn emoji_for(id: &str) -> &str {
+    match id {
+        "openai" => "",
+        "anthropic" => "",
+        "google" => "",
+        "openrouter" => "",
+        "groq" => "",
+        "deepseek" => "",
+        _ => "",
+    }
+}
+
+/// Find a provider by ID.
+pub fn find_provider(id: &str) -> Option<&'static ProviderInfo> {
+    PROVIDERS.iter().find(|p| p.id == id)
+}
+
+/// Handle callback queries from inline keyboards.
+/// Returns (response_message, updated_keyboard_json, true_if_done).
+pub fn handle_callback(
+    store: &ModelStore,
+    channel: &str,
+    user_id: &str,
+    data: &str,
+) -> Result<(String, Option<String>, bool)> {
+    let parts: Vec<&str> = data.split(':').collect();
+
+    match parts.get(0) {
+        Some(&"model") => match parts.get(1) {
+            Some(&"provider") => {
+                // User selected a provider type
+                let provider_id = parts.get(2).copied().unwrap_or("custom");
+                let provider = find_provider(provider_id).unwrap_or(&PROVIDERS[6]); // default to custom
+
+                // Save provider type + default base URL
+                let mut ov = store.get(channel, user_id)?.unwrap_or_default();
+                ov.provider_type = Some(provider_id.to_string());
+                ov.base_url = Some(provider.default_base.to_string());
+                ov.updated_at = now_secs();
+                store.set(channel, user_id, &ov)?;
+
+                let msg = format!(
+                    "**{} selected.**\n\n\
+                     Send your API key:\n```\n/model key YOUR_KEY\n```\n\n\
+                     Key format: `{}`\nAuth: `{}`\n\n\
+                     Security: Keys are AES-256-GCM encrypted at rest.",
+                    provider.name, provider.key_prefix_hint, provider.auth_header
+                );
+
+                Ok((msg, None, true))
+            }
+            Some(&"reset") => {
+                if store.delete(channel, user_id)? {
+                    Ok(("Override cleared. Using global defaults.".into(), None, true))
+                } else {
+                    Ok(("No override was set.".into(), None, true))
+                }
+            }
+            Some(&"cancel") => Ok(("Cancelled.".into(), None, true)),
+            _ => Ok((format_help(), None, true)),
+        },
+        _ => Ok((format_help(), None, true)),
+    }
+}
+
+/// Parse and handle the text /model command.
 pub fn handle_model(
     store: &ModelStore,
     channel: &str,
@@ -26,7 +183,7 @@ pub fn handle_model(
 ) -> Result<String> {
     let args = args.trim();
 
-    // /model with no args - show current
+    // /model with no args - show current status + keyboard
     if args.is_empty() {
         return show_current(store, channel, user_id);
     }
@@ -40,105 +197,141 @@ pub fn handle_model(
         }
     }
 
-    // Parse arguments
-    let mut model_id: Option<String> = None;
-    let mut base_url: Option<String> = None;
-    let mut api_key: Option<String> = None;
+    // Parse subcommands: provider <type>, key <key>, id <model_id>
+    let tokens: Vec<&str> = args.splitn(3, ' ').collect();
 
-    let tokens: Vec<&str> = args.split_whitespace().collect();
-    let mut i = 0;
-    while i < tokens.len() {
-        match tokens[i] {
-            "base" if i + 1 < tokens.len() => {
-                base_url = Some(tokens[i + 1].to_string());
-                i += 2;
+    match tokens.as_slice() {
+        ["provider", pt, ..] => {
+            let provider = find_provider(pt).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Unknown provider: {}. Available: {}",
+                    pt,
+                    PROVIDERS.iter().map(|p| p.id).collect::<Vec<_>>().join(", ")
+                )
+            })?;
+
+            let mut ov = store.get(channel, user_id)?.unwrap_or_default();
+            ov.provider_type = Some(provider.id.to_string());
+            ov.base_url = Some(provider.default_base.to_string());
+            ov.updated_at = now_secs();
+            store.set(channel, user_id, &ov)?;
+
+            Ok(format!(
+                "Provider set to **{}**.\nDefault endpoint: {}\nNext: /model key YOUR_KEY",
+                provider.name, provider.default_base
+            ))
+        }
+        ["key", rest, ..] => {
+            let key = rest.trim();
+            if key.is_empty() || key.len() < 4 {
+                return Ok("Please provide a valid API key: /model key sk-xxx".into());
             }
-            "key" if i + 1 < tokens.len() => {
-                api_key = Some(tokens[i + 1].to_string());
-                i += 2;
+
+            let mut ov = store.get(channel, user_id)?.unwrap_or_default();
+            let encrypted = store.encrypt_key(key)?;
+            ov.encrypted_api_key = Some(encrypted);
+            ov.updated_at = now_secs();
+            store.set(channel, user_id, &ov)?;
+
+            let masked = mask_key(key);
+            Ok(format!(
+                "API key saved: {}\nNext: /model id MODEL_NAME (e.g., /model id gpt-4o)",
+                masked
+            ))
+        }
+        ["id", rest, ..] => {
+            let model_id = rest.trim();
+            if model_id.is_empty() {
+                return Ok("Please specify a model ID: /model id gpt-4o".into());
             }
-            other => {
-                // Treat as model_id if it doesn't look like a flag value
-                if model_id.is_none() && !other.starts_with("http") {
-                    model_id = Some(other.to_string());
-                }
-                i += 1;
+
+            let mut ov = store.get(channel, user_id)?.unwrap_or_default();
+            ov.model_id = Some(model_id.to_string());
+            ov.updated_at = now_secs();
+            store.set(channel, user_id, &ov)?;
+
+            let summary = build_summary("telegram", user_id, &ov);
+            Ok(format!("Model ID updated to **{}**.\n\n{}", model_id, summary))
+        }
+        _ => {
+            // Treat single token as model ID for backward compat
+            if !args.contains(' ') {
+                let mut ov = store.get(channel, user_id)?.unwrap_or_default();
+                ov.model_id = Some(args.to_string());
+                ov.updated_at = now_secs();
+                store.set(channel, user_id, &ov)?;
+                return Ok(format!("Model ID updated to **{}**.", args));
             }
+            Ok(format!("Unknown option: {}\n\n{}", args, format_help()))
         }
     }
-
-    // Load existing or create new
-    let mut ov = store.get(channel, user_id)?.unwrap_or_default();
-
-    let mut changes = Vec::new();
-
-    if let Some(m) = model_id {
-        ov.model_id = Some(m.clone());
-        changes.push(format!("Model: {}", m));
-    }
-    if let Some(b) = base_url {
-        ov.base_url = Some(b.clone());
-        changes.push(format!("Base URL: {}", b));
-    }
-    if let Some(k) = api_key {
-        let encrypted = store.encrypt_key(&k)?;
-        ov.encrypted_api_key = Some(encrypted);
-        let masked = mask_key(&k);
-        changes.push(format!("API Key: {}", masked));
-    }
-
-    if changes.is_empty() {
-        return show_current(store, channel, user_id);
-    }
-
-    ov.updated_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    store.set(channel, user_id, &ov)?;
-
-    let mut response = format!("Model settings updated:\n{}", changes.join("\n"));
-
-    if let Some(ref m) = ov.model_id {
-        response.push_str(&format!("\nActive model: {}", m));
-    }
-
-    Ok(response)
 }
 
 fn show_current(store: &ModelStore, channel: &str, user_id: &str) -> Result<String> {
     match store.get(channel, user_id)? {
-        Some(ov) => {
-            let mut lines = vec!["Current model override:".to_string()];
-            lines.push(format!(
-                "  Model: {}",
-                ov.model_id.as_deref().unwrap_or("(not set)")
-            ));
-            lines.push(format!(
-                "  Base URL: {}",
-                ov.base_url.as_deref().unwrap_or("(not set)")
-            ));
-            lines.push(format!(
-                "  API Key: {}",
-                if ov.encrypted_api_key.is_some() {
-                    "(set, encrypted)"
-                } else {
-                    "(not set)"
-                }
-            ));
-            lines.push("\nUsage: /model <model_id> base <url> key <api_key>".into());
-            lines.push("Reset: /model reset".into());
-            Ok(lines.join("\n"))
-        }
-        None => Ok(
+        Some(ov) => Ok(build_summary(channel, user_id, &ov)),
+        None => Ok(format!(
             "No model override set. Using global defaults.\n\n\
-             Usage: /model <model_id> base <url> key <api_key>\n\
-             Example: /model gpt-4o base https://api.openai.com/v1 key sk-xxx\n\
-             Reset: /model reset"
-                .into(),
-        ),
+             Choose a provider:\n\
+             {}\n\n\
+             Or use text commands:\n\
+             /model provider openai\n\
+             /model key sk-xxx\n\
+             /model id gpt-4o\n\
+             /model reset",
+            PROVIDERS
+                .iter()
+                .map(|p| format!("/model provider {} — {}", p.id, p.name))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )),
     }
+}
+
+fn build_summary(channel: &str, user_id: &str, ov: &UserModelOverride) -> String {
+    let provider_name = ov
+        .provider_type
+        .as_deref()
+        .and_then(|pt| find_provider(pt).map(|p| p.name))
+        .unwrap_or("(not set)");
+
+    let key_status = if ov.encrypted_api_key.is_some() {
+        "(set, encrypted)"
+    } else {
+        "(not set)"
+    };
+
+    format!(
+        "Model override for {}/{}:\n\
+         - Provider: {}\n\
+         - Model: {}\n\
+         - Base URL: {}\n\
+         - API Key: {}\n\n\
+         Change: /model provider <type> | /model key <k> | /model id <id>\n\
+         Reset: /model reset",
+        channel,
+        user_id,
+        provider_name,
+        ov.model_id.as_deref().unwrap_or("(not set)"),
+        ov.base_url.as_deref().unwrap_or("(not set)"),
+        key_status,
+    )
+}
+
+fn format_help() -> String {
+    format!(
+        "Usage:\n\
+         /model provider openai|anthropic|google|openrouter|groq|deepseek|custom\n\
+         /model key YOUR_API_KEY\n\
+         /model id MODEL_ID\n\
+         /model reset\n\n\
+         Available providers: {}",
+        PROVIDERS
+            .iter()
+            .map(|p| format!("{} ({})", p.id, p.default_base))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 /// Mask an API key for display: show first 4 and last 4 chars.
@@ -151,23 +344,30 @@ fn mask_key(key: &str) -> String {
 }
 
 /// Resolve the effective model config for a user session.
-/// Returns (base_url, api_key, model_id) where each field falls back to None
+/// Returns (provider_type, base_url, api_key, model_id) where each field falls back to None
 /// if the user hasn't overridden it.
 pub fn resolve_user_model(
     store: &ModelStore,
     channel: &str,
     user_id: &str,
-) -> Result<(Option<String>, Option<String>, Option<String>)> {
+) -> Result<(Option<String>, Option<String>, Option<String>, Option<String>)> {
     match store.get(channel, user_id)? {
         Some(ov) => {
             let api_key = match &ov.encrypted_api_key {
                 Some(enc) => Some(store.decrypt_key(enc)?),
                 None => None,
             };
-            Ok((ov.base_url, api_key, ov.model_id))
+            Ok((ov.provider_type, ov.base_url, api_key, ov.model_id))
         }
-        None => Ok((None, None, None)),
+        None => Ok((None, None, None, None)),
     }
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 #[cfg(test)]
@@ -194,51 +394,58 @@ mod tests {
     }
 
     #[test]
-    fn test_set_model_id() {
+    fn test_set_provider() {
         let store = temp_store();
-        let resp = handle_model(&store, "telegram", "1", "gpt-4o").unwrap();
-        assert!(resp.contains("Model: gpt-4o"));
+        let resp = handle_model(&store, "telegram", "1", "provider anthropic").unwrap();
+        assert!(resp.contains("Anthropic"));
+
+        let ov = store.get("telegram", "1").unwrap().unwrap();
+        assert_eq!(ov.provider_type.as_deref(), Some("anthropic"));
+        assert_eq!(ov.base_url.as_deref(), Some("https://api.anthropic.com/v1/messages"));
     }
 
     #[test]
-    fn test_set_base_and_key() {
+    fn test_set_key_and_id() {
+        let store = temp_store();
+        handle_model(&store, "telegram", "2", "provider openai").unwrap();
+        let resp = handle_model(&store, "telegram", "2", "key sk-test12345678").unwrap();
+        assert!(resp.contains("sk-t***5678"));
+
+        let resp = handle_model(&store, "telegram", "2", "id gpt-4o").unwrap();
+        assert!(resp.contains("gpt-4o"));
+
+        let ov = store.get("telegram", "2").unwrap().unwrap();
+        assert_eq!(ov.model_id.as_deref(), Some("gpt-4o"));
+        assert!(ov.encrypted_api_key.is_some());
+    }
+
+    #[test]
+    fn test_keyword_arg_parsing() {
         let store = temp_store();
         let resp = handle_model(
             &store,
             "telegram",
-            "2",
-            "gpt-4o base https://api.openai.com/v1 key sk-test12345678",
-        )
-        .unwrap();
-        assert!(resp.contains("Model: gpt-4o"));
-        assert!(resp.contains("Base URL: https://api.openai.com/v1"));
-        assert!(resp.contains("API Key: sk-t***5678"));
-    }
-
-    #[test]
-    fn test_reset() {
-        let store = temp_store();
-        handle_model(&store, "telegram", "3", "gpt-4o").unwrap();
-        let resp = handle_model(&store, "telegram", "3", "reset").unwrap();
-        assert!(resp.contains("cleared"));
-        assert!(store.get("telegram", "3").unwrap().is_none());
-    }
-
-    #[test]
-    fn test_resolve_user_model() {
-        let store = temp_store();
-        handle_model(
-            &store,
-            "telegram",
             "4",
-            "claude-3 base https://api.anthropic.com key sk-ant-secret123",
+            "provider google",
         )
         .unwrap();
+        assert!(resp.contains("Google"));
+        handle_model(&store, "telegram", "4", "key AIza-test123").unwrap();
+        handle_model(&store, "telegram", "4", "id gemini-2.0-flash").unwrap();
+    }
 
-        let (base, key, model) = resolve_user_model(&store, "telegram", "4").unwrap();
-        assert_eq!(base.as_deref(), Some("https://api.anthropic.com"));
-        assert_eq!(key.as_deref(), Some("sk-ant-secret123"));
-        assert_eq!(model.as_deref(), Some("claude-3"));
+    #[test]
+    fn test_resolve_with_provider_type() {
+        let store = temp_store();
+        handle_model(&store, "telegram", "5", "provider anthropic").unwrap();
+        handle_model(&store, "telegram", "5", "key sk-ant-secret").unwrap();
+        handle_model(&store, "telegram", "5", "id claude-3-opus").unwrap();
+
+        let (pt, base, key, model) = resolve_user_model(&store, "telegram", "5").unwrap();
+        assert_eq!(pt.as_deref(), Some("anthropic"));
+        assert_eq!(base.as_deref(), Some("https://api.anthropic.com/v1/messages"));
+        assert_eq!(key.as_deref(), Some("sk-ant-secret"));
+        assert_eq!(model.as_deref(), Some("claude-3-opus"));
     }
 
     #[test]

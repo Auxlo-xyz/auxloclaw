@@ -18,6 +18,9 @@ use std::path::PathBuf;
 /// What a user can override about their model/provider.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UserModelOverride {
+    /// Provider type for adapter selection: "openai" / "anthropic" / "google" / "openrouter" / "groq" / "deepseek" / "custom"
+    #[serde(default)]
+    pub provider_type: Option<String>,
     pub base_url: Option<String>,
     pub model_id: Option<String>,
     /// AES-256-GCM encrypted API key (base64 encoded: nonce + ciphertext + tag)

@@ -222,6 +222,7 @@ pub async fn start(
                 .filter_command::<Command>()
                 .endpoint(handle_command),
         )
+        .branch(Update::filter_callback_query().endpoint(handle_callback_query))
         .branch(Update::filter_message().endpoint(handle_message));
 
     tokio::spawn(async move {
@@ -379,10 +380,36 @@ async fn handle_command(
         }
         Command::Model(args) => {
             let user_id = msg.from().map(|u| u.id.0).unwrap_or(0);
+            let user_id_str = user_id.to_string();
+
+            // When /model is called with no args, show the inline keyboard
+            if args.trim().is_empty() {
+                let response = match crate::commands::model::handle_model(
+                    &state.model_store,
+                    "telegram",
+                    &user_id_str,
+                    &args,
+                ) {
+                    Ok(resp) => resp,
+                    Err(e) => format!("Error: {}", e),
+                };
+
+                let keyboard = crate::commands::model::provider_keyboard_json();
+                let formatted = crate::channels::markdown::markdown_to_telegram(&response);
+                let markup: teloxide::types::InlineKeyboardMarkup = serde_json::from_str(&keyboard).unwrap_or_default();
+                let _ = bot
+                    .send_message(teloxide::types::ChatId(chat_id), &formatted)
+                    .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                    .reply_markup(markup)
+                    .await;
+                return Ok(());
+            }
+
+            // Text-based /model commands
             let response = match crate::commands::model::handle_model(
                 &state.model_store,
                 "telegram",
-                &user_id.to_string(),
+                &user_id_str,
                 &args,
             ) {
                 Ok(resp) => resp,
@@ -424,6 +451,52 @@ async fn handle_command(
     };
 
     send_markdown_message(&bot, chat_id, &response).await?;
+    Ok(())
+}
+
+/// Handle Telegram callback queries (inline keyboard button presses).
+async fn handle_callback_query(
+    bot: Bot,
+    q: teloxide::types::CallbackQuery,
+    state: Arc<TelegramState>,
+) -> ResponseResult<()> {
+    let chat_id = if let Some(msg) = &q.message {
+        msg.chat.id.0
+    } else {
+        return Ok(());
+    };
+
+    let data = q.data.as_deref().unwrap_or("");
+
+    // Only handle model:... callbacks
+    if !data.starts_with("model:") {
+        return Ok(());
+    }
+
+    let user_id = q.from.id.0;
+
+    match crate::commands::model::handle_callback(
+        &state.model_store,
+        "telegram",
+        &user_id.to_string(),
+        data,
+    ) {
+        Ok((response, _keyboard, _done)) => {
+            let _ = bot.answer_callback_query(q.id).await;
+            let formatted = crate::channels::markdown::markdown_to_telegram(&response);
+            let _ = bot
+                .send_message(teloxide::types::ChatId(chat_id), &formatted)
+                .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                .await;
+        }
+        Err(e) => {
+            let _ = bot
+                .answer_callback_query(q.id)
+                .text(format!("Error: {}", e))
+                .await;
+        }
+    }
+
     Ok(())
 }
 
