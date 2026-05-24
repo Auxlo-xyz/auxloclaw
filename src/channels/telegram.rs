@@ -521,10 +521,10 @@ async fn handle_callback_query(
         let _ = bot.send_message(
             teloxide::types::ChatId(chat_id),
             format!(
-                "{} API format selected.\n\nSend your endpoint URL and model ID together, like:\n`https://your-api.example.com/v1 model-name`\n\nI'll auto-detect which is which.",
+                "{} API format selected.\n\nSend your endpoint URL and model ID together, like:\nhttps://your-api.example.com/v1 model-name\n\nI'll auto-detect which is which.",
                 label
             ),
-        ).parse_mode(teloxide::types::ParseMode::MarkdownV2).await;
+        ).await;
 
         return Ok(());
     }
@@ -536,35 +536,19 @@ async fn handle_callback_query(
         data,
     ) {
         Ok((response, keyboard, done)) => {
-            let formatted = crate::channels::markdown::markdown_to_telegram(&response);
             let markup_str = keyboard.as_deref().unwrap_or("");
             let send_result = if markup_str.is_empty() {
-                bot.send_message(teloxide::types::ChatId(chat_id), &formatted)
-                    .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                bot.send_message(teloxide::types::ChatId(chat_id), &response)
                     .await
             } else {
                 let markup: teloxide::types::InlineKeyboardMarkup =
                     serde_json::from_str(markup_str).unwrap_or_default();
-                bot.send_message(teloxide::types::ChatId(chat_id), &formatted)
-                    .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                bot.send_message(teloxide::types::ChatId(chat_id), &response)
                     .reply_markup(markup)
                     .await
             };
             if let Err(ref e) = send_result {
-                tracing::warn!("MarkdownV2 send failed, retrying as plain text: {}", e);
-                // Retry without MarkdownV2 formatting
-                let plain = if markup_str.is_empty() {
-                    bot.send_message(teloxide::types::ChatId(chat_id), &response).await
-                } else {
-                    let markup: teloxide::types::InlineKeyboardMarkup =
-                        serde_json::from_str(markup_str).unwrap_or_default();
-                    bot.send_message(teloxide::types::ChatId(chat_id), &response)
-                        .reply_markup(markup)
-                        .await
-                };
-                if let Err(ref e2) = plain {
-                    tracing::error!("Plain text send also failed: {}", e2);
-                }
+                tracing::error!("Callback message send failed: {}", e);
             }
             if done {
                 let _ = bot.answer_callback_query(q.id).await;
@@ -631,7 +615,7 @@ async fn handle_model_flow(
                 bot,
                 chat_id,
                 &format!(
-                    "Endpoint saved: `{}`\nModel: `{}`\n\nNow send your API key (just the key, nothing else).\nI will delete your message after saving it.",
+                    "Endpoint saved: {}\nModel: {}\n\nNow send your API key (just the key, nothing else).\nI will delete your message after saving it.",
                     url, model_id
                 ),
             ).await?;
