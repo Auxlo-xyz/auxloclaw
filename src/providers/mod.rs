@@ -1,5 +1,16 @@
 //! Provider pool with multi-provider support
 //! Users can choose which provider/model to use at any time
+//!
+//! Provider adapters (in `adapters/`) translate AUXLOCLAW's internal
+//! request/response format to provider-native formats. Currently supports:
+//!   - OpenAI-compatible (NVIDIA, OpenRouter, Groq, DeepSeek, custom endpoints)
+//!   - Google Gemini (AI Studio OpenAI-compatible endpoint)
+//!   - Anthropic Claude (native Messages API)
+
+pub mod adapters;
+
+use adapters::AdapterRegistry;
+use std::sync::OnceLock;
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
@@ -18,11 +29,17 @@ use tokio::time;
 use crate::config::{ProviderEntry, ProvidersConfig};
 use sha2::{Digest, Sha256};
 
+static ADAPTERS: OnceLock<AdapterRegistry> = OnceLock::new();
+
+fn adapters() -> &'static AdapterRegistry {
+    ADAPTERS.get_or_init(|| AdapterRegistry::new())
+}
+
 /// LLM Provider trait - unified interface for all providers
 #[async_trait]
 pub trait LLMProvider: Send + Sync {
     fn name(&self) -> &str;
-    fn provider_type(&self) -> &str; // e.g., "nvidia", "google", "openai"
+    fn provider_type(&self) -> &str; // e.g., "nvidia", "google", "openai", "anthropic"
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse>;
     async fn stream(&self, request: CompletionRequest) -> Result<mpsc::Receiver<StreamChunk>>;
@@ -291,87 +308,26 @@ impl LLMProvider for OpenAICompatibleProvider {
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
-        // Strip provider prefix only for Google (they don't accept it)
-        let model_name = if self.provider_type == "google" {
-            request
-                .model
-                .split('/')
-                .last()
-                .unwrap_or(&request.model)
-                .to_string()
-        } else {
-            request.model.clone()
-        };
+        let adapter = adapters().get_or_default(&self.provider_type);
+        let url = adapter.build_url(&self.api_base, &self.api_key, &request.model);
+        let mut headers = adapter.build_headers(&self.api_key);
 
-        let base = self.api_base.trim_end_matches('/');
-        let mut url = format!("{}/chat/completions", base);
-
-        // Google AI Studio requires key as query param
-        if self.provider_type == "google" && !self.api_key.is_empty() {
-            url = format!("{}?key={}", url, self.api_key);
-        }
-
-        let headers = if self.provider_type == "google" {
-            let mut h = reqwest::header::HeaderMap::new();
-            h.insert(
-                reqwest::header::CONTENT_TYPE,
-                "application/json".parse().unwrap(),
-            );
-            if !self.api_key.is_empty() {
-                h.insert(
-                    reqwest::header::AUTHORIZATION,
-                    format!("Bearer {}", self.api_key).parse().unwrap(),
-                );
+        // Merge extra headers from config
+        for (key, value) in &self.extra_headers {
+            if let (Ok(name), Ok(val)) = (
+                key.parse::<reqwest::header::HeaderName>(),
+                value.parse::<reqwest::header::HeaderValue>(),
+            ) {
+                headers.insert(name, val);
             }
-            h
-        } else {
-            self.build_headers()
-        };
+        }
 
         tracing::debug!("Provider {} making request to: {}", self.name, url);
 
-        let mut req = request.clone();
-        req.model = model_name.to_string();
+        let body = adapter.transform_request(&request);
 
-        // Ensure exactly one system message at position 0 -- merge duplicates
-        // Some providers (Google, DeepSeek, certain OpenRouter models) reject
-        // requests with system messages not at the beginning
-        let mut system_content = String::new();
-        let mut other_messages = Vec::new();
-        for msg in &req.messages {
-            if msg.role == "system" {
-                if let Some(ref c) = msg.content {
-                    if !system_content.is_empty() {
-                        system_content.push_str("\n\n");
-                    }
-                    system_content.push_str(c);
-                }
-            } else {
-                other_messages.push(msg.clone());
-            }
-        }
-
-        if system_content.is_empty() {
-            system_content = "You are a helpful assistant.".to_string();
-            tracing::warn!(
-                "Provider {} request missing system message -- injected default",
-                self.name
-            );
-        }
-
-        req.messages = vec![Message {
-            role: "system".to_string(),
-            content: Some(system_content),
-            tool_calls: None,
-            tool_call_id: None,
-            name: None,
-        }];
-        req.messages.extend(other_messages);
-
-        let body = serde_json::to_value(&req)?;
-
-        let msg_count = req.messages.len();
-        let tool_count = req.tools.as_ref().map(|t| t.len()).unwrap_or(0);
+        let msg_count = request.messages.len();
+        let tool_count = request.tools.as_ref().map(|t| t.len()).unwrap_or(0);
         let payload_bytes = body.to_string().len();
         tracing::info!(
             "Provider {} request: {} messages, {} tools, {} bytes payload -> {}",
@@ -410,158 +366,44 @@ impl LLMProvider for OpenAICompatibleProvider {
                         self.name,
                         path.display()
                     ),
-                    Err(capture_error) => tracing::error!(
+                    Err(e) => tracing::error!(
                         "Provider {} failed to capture rejected request: {}",
-                        self.name,
-                        capture_error
+                        self.name, e
                     ),
                 }
             }
             return Err(anyhow!("Provider {} HTTP {}: {}", self.name, status, response_body));
         }
 
-        // Check for error responses that return HTTP 200 with error in body (some providers do this)
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&response_body) {
-            if val.get("object").and_then(|o| o.as_str()) == Some("error")
-                || val.get("error").is_some() && !val.get("choices").is_some()
-            {
-                let err_msg = val.get("message")
-                    .or_else(|| val.get("error").and_then(|e| e.get("message")))
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("Unknown provider error");
-                let err_code = val.get("code")
-                    .or_else(|| val.get("error").and_then(|e| e.get("code")))
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "unknown".into());
-                tracing::error!(
-                    "Provider {} returned error in body (HTTP {}): code={} message={}\nFull response: {}",
-                    self.name, status, err_code, err_msg, response_body
-                );
-                return Err(anyhow!("Provider {} error (code={}): {}", self.name, err_code, err_msg));
-            }
-        }
-
-        let completion: OpenAICompletion = match serde_json::from_str(&response_body) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!(
-                    "Provider {} JSON parse error: {:#}\nFull response body:\n{}",
-                    self.name, e, response_body
-                );
-                return Err(anyhow!("Provider {} JSON parse error: {:#}", self.name, e));
-            }
-        };
-
-        if let Some(err) = &completion.error {
-            let err_msg = err
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("Unknown error");
-            let err_code = err.get("code").and_then(|c| c.as_str()).unwrap_or("none");
-            let err_status = err.get("status").and_then(|s| s.as_str()).unwrap_or("none");
+        // Adapter handles response parsing (provider-specific JSON shapes)
+        adapter.parse_response(&response_body).map_err(|e| {
             tracing::error!(
-                "Provider {} returned error in response body: code={} status={} message={}\nFull error object: {}",
-                self.name, err_code, err_status, err_msg,
-                serde_json::to_string(err).unwrap_or_default()
+                "Provider {} response parse error: {:#}\nFull response body:\n{}",
+                self.name, e, response_body
             );
-            return Err(anyhow!("Provider {} error (code={}, status={}): {}",
-                self.name, err_code, err_status, err_msg));
-        }
-
-        let content = completion
-            .choices
-            .first()
-            .map(|c| {
-                c.message
-                    .content
-                    .clone()
-                    .or(c.message.reasoning_content.clone())
-                    .or(c.message.reasoning.clone())
-                    .unwrap_or_default()
-            })
-            .unwrap_or_default();
-
-        if completion.choices.is_empty() {
-            tracing::error!(
-                "Provider {} returned empty choices array. Usage: {:?}\nRaw response: {}",
-                self.name, completion.usage, response_body
-            );
-        }
-
-        if let Some(ref usage) = completion.usage {
-            tracing::info!(
-                "Provider {} completion: prompt_tokens={} completion_tokens={} total_tokens={}",
-                self.name, usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
-            );
-        }
-
-        Ok(CompletionResponse {
-            content,
-            tool_calls: completion
-                .choices
-                .first()
-                .and_then(|c| c.message.tool_calls.clone()),
-            usage: completion.usage.map(|u| Usage {
-                prompt_tokens: u.prompt_tokens,
-                completion_tokens: u.completion_tokens,
-                total_tokens: u.total_tokens,
-            }),
+            anyhow!("Provider {} response parse error: {:#}", self.name, e)
         })
     }
 
     async fn stream(&self, request: CompletionRequest) -> Result<mpsc::Receiver<StreamChunk>> {
-        let (tx, rx) = mpsc::channel(100);
+        let adapter = adapters().get_or_default(&self.provider_type);
+        let url = adapter.build_url(&self.api_base, &self.api_key, &request.model);
+        let mut headers = adapter.build_headers(&self.api_key);
 
-        let base = self.api_base.trim_end_matches('/');
-        let url = format!("{}/chat/completions", base);
+        for (key, value) in &self.extra_headers {
+            if let (Ok(name), Ok(val)) = (
+                key.parse::<reqwest::header::HeaderName>(),
+                value.parse::<reqwest::header::HeaderValue>(),
+            ) {
+                headers.insert(name, val);
+            }
+        }
+
         let mut stream_request = request;
         stream_request.stream = Some(true);
+        let body = adapter.transform_request(&stream_request);
 
-        let body = serde_json::to_value(&stream_request)?;
-        let headers = self.build_headers();
-        let client = self.client.clone();
-        let provider_name = self.name.clone();
-
-        tokio::spawn(async move {
-            match client.post(&url).headers(headers).json(&body).send().await {
-                Ok(response) => {
-                    if response.status().is_success() {
-                        use futures::StreamExt;
-                        let mut stream = response.bytes_stream();
-                        while let Some(chunk) = stream.next().await {
-                            if let Ok(bytes) = chunk {
-                                let text = String::from_utf8_lossy(&bytes);
-                                for line in text.lines() {
-                                    if line.starts_with("data: ") {
-                                        let data = &line[6..];
-                                        if data == "[DONE]" {
-                                            let _ = tx
-                                                .send(StreamChunk {
-                                                    id: None,
-                                                    choices: vec![],
-                                                    done: true,
-                                                })
-                                                .await;
-                                            break;
-                                        }
-                                        if let Ok(parsed) =
-                                            serde_json::from_str::<StreamChunk>(data)
-                                        {
-                                            let _ = tx.send(parsed).await;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Provider {} stream error: {}", provider_name, e);
-                }
-            }
-        });
-
-        Ok(rx)
+        adapter.stream_response(&self.client, &url, headers, body).await
     }
 
     async fn embed(&self, _text: &str) -> Result<Vec<f32>> {
