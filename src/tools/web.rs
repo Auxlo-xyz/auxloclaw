@@ -652,7 +652,8 @@ impl Tool for WebFetchTool {
             });
         }
         
-        let (ok, text) = run_agent_browser(&["text"])?;
+        let (ok, _) = run_agent_browser(&["wait", "--load", "networkidle"])?;
+        let (ok, text) = run_agent_browser(&["get", "text"])?;
         let duration_ms = start.elapsed().as_millis() as u64;
         
         Ok(ToolResult {
