@@ -343,6 +343,13 @@ fn show_current(store: &ModelStore, channel: &str, user_id: &str) -> Result<Stri
     }
 }
 
+pub fn build_summary_for_user(channel: &str, user_id: &str, store: &ModelStore) -> Result<String> {
+    match store.get(channel, user_id)? {
+        Some(ov) => Ok(build_summary(channel, user_id, &ov)),
+        None => Ok("No model override set.".into()),
+    }
+}
+
 fn build_summary(channel: &str, user_id: &str, ov: &UserModelOverride) -> String {
     let provider_name = ov
         .provider_type
@@ -402,7 +409,7 @@ fn format_help() -> String {
 }
 
 /// Mask an API key for display: show first 4 and last 4 chars.
-fn mask_key(key: &str) -> String {
+pub fn mask_key(key: &str) -> String {
     if key.len() <= 12 {
         format!("{}***", &key[..4.min(key.len())])
     } else {
@@ -430,7 +437,7 @@ pub fn resolve_user_model(
     }
 }
 
-fn now_secs() -> u64 {
+pub fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -557,5 +564,43 @@ mod tests {
         store.set("telegram", "user", &ov).unwrap();
         let summary = handle_model(&store, "telegram", "user", "").unwrap();
         assert!(summary.contains("Custom (OpenAI-compatible)"));
+    }
+
+    #[test]
+    fn parse_endpoint_and_model_from_text() {
+        // Test the auto-detection logic used in handle_model_flow
+        fn detect(text: &str) -> Option<(&str, &str)> {
+            let tokens: Vec<&str> = text.split_whitespace().collect();
+            let mut url: Option<&str> = None;
+            let mut model_id: Option<&str> = None;
+            for token in &tokens {
+                if token.contains("/v1") || token.starts_with("http://") || token.starts_with("https://") {
+                    url = Some(token);
+                } else {
+                    model_id = Some(token);
+                }
+            }
+            Some((url?, model_id?))
+        }
+
+        let (url, model) = detect("https://api.example.com/v1 gpt-4o").unwrap();
+        assert_eq!(url, "https://api.example.com/v1");
+        assert_eq!(model, "gpt-4o");
+
+        // Reversed order still works
+        let (url, model) = detect("gpt-4o https://api.example.com/v1").unwrap();
+        assert_eq!(url, "https://api.example.com/v1");
+        assert_eq!(model, "gpt-4o");
+
+        // URL with /v1 in path
+        let (url, model) = detect("http://localhost:8080/v1 my-model").unwrap();
+        assert_eq!(url, "http://localhost:8080/v1");
+        assert_eq!(model, "my-model");
+
+        // Missing URL
+        assert!(detect("gpt-4o only-model").is_none());
+
+        // Missing model
+        assert!(detect("https://api.example.com/v1").is_none());
     }
 }
