@@ -333,21 +333,40 @@ impl LLMProvider for OpenAICompatibleProvider {
         let mut req = request.clone();
         req.model = model_name.to_string();
 
-        // Ensure at least one system message exists at position 0
-        // Some providers (Google, DeepSeek, certain OpenRouter models) return HTTP 400 without it
-        if req.messages.first().map(|m| m.role.as_str()) != Some("system") {
-            req.messages.insert(0, Message {
-                role: "system".to_string(),
-                content: Some("You are a helpful assistant.".to_string()),
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            });
+        // Ensure exactly one system message at position 0 -- merge duplicates
+        // Some providers (Google, DeepSeek, certain OpenRouter models) reject
+        // requests with system messages not at the beginning
+        let mut system_content = String::new();
+        let mut other_messages = Vec::new();
+        for msg in &req.messages {
+            if msg.role == "system" {
+                if let Some(ref c) = msg.content {
+                    if !system_content.is_empty() {
+                        system_content.push_str("\n\n");
+                    }
+                    system_content.push_str(c);
+                }
+            } else {
+                other_messages.push(msg.clone());
+            }
+        }
+
+        if system_content.is_empty() {
+            system_content = "You are a helpful assistant.".to_string();
             tracing::warn!(
                 "Provider {} request missing system message -- injected default",
                 self.name
             );
         }
+
+        req.messages = vec![Message {
+            role: "system".to_string(),
+            content: Some(system_content),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }];
+        req.messages.extend(other_messages);
 
         let body = serde_json::to_value(&req)?;
 

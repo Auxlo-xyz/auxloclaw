@@ -82,10 +82,19 @@ pub fn build_pruned_messages(
     let mut messages = vec![Message::new("system", sys_prompt)];
 
     for m in recent {
-        messages.push(Message::new(
-            &m.role,
-            truncate_for_summary(&m.content, MAX_SUMMARY_CHARS),
-        ));
+        if m.role == "system" {
+            if let Some(ref mut first) = messages.first_mut() {
+                if let Some(ref mut content) = first.content {
+                    content.push_str("\n\n");
+                    content.push_str(&m.content);
+                }
+            }
+        } else {
+            messages.push(Message::new(
+                &m.role,
+                truncate_for_summary(&m.content, MAX_SUMMARY_CHARS),
+            ));
+        }
     }
 
     messages.push(Message::new("user", user_message));
@@ -156,5 +165,19 @@ mod tests {
         assert_eq!(clamp_recent_turns(0), 10);
         assert_eq!(clamp_recent_turns(8), 8);
         assert_eq!(clamp_recent_turns(100), 50);
+    }
+
+    #[test]
+    fn merges_system_messages_from_compaction() {
+        let mut h = Vec::new();
+        h.push(history("system", "[COMPACTION SUMMARY] Prior context was about building a proxy."));
+        h.push(history("user", "what was I working on?"));
+        let messages = build_pruned_messages("You are an agent.".into(), &h, "tell me".into(), 10, 50_000);
+        let system_msgs: Vec<_> = messages.iter().filter(|m| m.role == "system").collect();
+        assert_eq!(system_msgs.len(), 1, "must have exactly one system message");
+        let sys_content = system_msgs[0].content.as_deref().unwrap_or("");
+        assert!(sys_content.contains("You are an agent."));
+        assert!(sys_content.contains("COMPACTION SUMMARY"));
+        assert!(sys_content.contains("Prior context"));
     }
 }
