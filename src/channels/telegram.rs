@@ -481,13 +481,21 @@ async fn handle_callback_query(
         &user_id.to_string(),
         data,
     ) {
-        Ok((response, _keyboard, _done)) => {
-            let _ = bot.answer_callback_query(q.id).await;
+        Ok((response, keyboard, done)) => {
+            let _ = bot.answer_callback_query(q.id.clone()).await;
             let formatted = crate::channels::markdown::markdown_to_telegram(&response);
-            let _ = bot
-                .send_message(teloxide::types::ChatId(chat_id), &formatted)
-                .parse_mode(teloxide::types::ParseMode::MarkdownV2)
-                .await;
+            let markup_str = keyboard.as_deref().unwrap_or("");
+            if !markup_str.is_empty() {
+                let markup: teloxide::types::InlineKeyboardMarkup = serde_json::from_str(markup_str).unwrap_or_default();
+                let _ = bot
+                    .send_message(teloxide::types::ChatId(chat_id), &formatted)
+                    .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                    .reply_markup(markup)
+                    .await;
+            }
+            if done {
+                let _ = bot.answer_callback_query(q.id).await;
+            }
         }
         Err(e) => {
             let _ = bot
