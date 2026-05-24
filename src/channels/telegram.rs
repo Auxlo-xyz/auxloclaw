@@ -110,12 +110,22 @@ impl Default for SessionState {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum ModelFlowState {
+    /// User selected custom subtype, waiting for endpoint URL + model ID
+    WaitingForEndpoint { subtype: String },
+    /// User sent endpoint, waiting for API key
+    WaitingForKey,
+}
+
 pub struct TelegramState {
     agent: Arc<AgentCore>,
     model_store: Arc<crate::memory::model_store::ModelStore>,
     sessions: RwLock<HashMap<i64, SessionState>>,
     code_mode: Arc<crate::memory::CodeModeStore>,
     config: TelegramConfig,
+    /// Per-user flow state for multi-step model setup (ephemeral, lost on restart)
+    pending_model_flows: RwLock<HashMap<i64, ModelFlowState>>,
 }
 
 impl TelegramState {
@@ -126,6 +136,7 @@ impl TelegramState {
             sessions: RwLock::new(HashMap::new()),
             code_mode,
             config,
+            pending_model_flows: RwLock::new(HashMap::new()),
         }
     }
 
@@ -475,6 +486,49 @@ async fn handle_callback_query(
 
     let user_id = q.from.id.0;
 
+    // Special handling for custom_subtype: set flow state instead of returning text instructions
+    if data.starts_with("model:custom_subtype:") {
+        let subtype = data.strip_prefix("model:custom_subtype:").unwrap_or("openai-compatible");
+        let label = if subtype == "anthropic" { "Anthropic-style" } else { "OpenAI-compatible" };
+
+        // Save the provider type
+        let user_id_str = user_id.to_string();
+        let get_result = state.model_store.get("telegram", &user_id_str);
+        let mut ov = match get_result {
+            Ok(Some(ov)) => ov,
+            Ok(None) => crate::memory::model_store::UserModelOverride::default(),
+            Err(e) => {
+                tracing::error!("Model store get error: {e:?}");
+                let _ = bot.answer_callback_query(q.id).text("Storage error").await;
+                return Ok(());
+            }
+        };
+        ov.provider_type = Some(format!("custom/{}", subtype));
+        ov.base_url = None;
+        ov.updated_at = crate::commands::model::now_secs();
+        if let Err(e) = state.model_store.set("telegram", &user_id_str, &ov) {
+            tracing::error!("Model store set error: {e:?}");
+            let _ = bot.answer_callback_query(q.id).text("Storage error").await;
+            return Ok(());
+        }
+
+        // Set flow state: waiting for endpoint URL + model ID
+        state.pending_model_flows.write().await.insert(chat_id, ModelFlowState::WaitingForEndpoint {
+            subtype: subtype.to_string(),
+        });
+
+        let _ = bot.answer_callback_query(q.id).await;
+        let _ = bot.send_message(
+            teloxide::types::ChatId(chat_id),
+            format!(
+                "{} API format selected.\n\nSend your endpoint URL and model ID together, like:\n`https://your-api.example.com/v1 model-name`\n\nI'll auto-detect which is which.",
+                label
+            ),
+        ).parse_mode(teloxide::types::ParseMode::MarkdownV2).await;
+
+        return Ok(());
+    }
+
     match crate::commands::model::handle_callback(
         &state.model_store,
         "telegram",
@@ -527,6 +581,96 @@ async fn handle_callback_query(
     Ok(())
 }
 
+async fn handle_model_flow(
+    bot: &Bot,
+    state: &TelegramState,
+    chat_id: i64,
+    msg_id: teloxide::types::MessageId,
+    text: &str,
+    flow: ModelFlowState,
+) -> anyhow::Result<()> {
+    use crate::commands::model;
+    let user_id = format!("{}", chat_id);
+    let store = &*state.model_store;
+
+    match flow {
+        ModelFlowState::WaitingForEndpoint { subtype } => {
+            // Parse URL + model ID from freeform text
+            // Auto-detect: anything with /v1 (or http(s)://) is the URL, rest is model ID
+            let tokens: Vec<&str> = text.split_whitespace().collect();
+            let mut url: Option<&str> = None;
+            let mut model_id: Option<&str> = None;
+
+            for token in &tokens {
+                if token.contains("/v1") || token.starts_with("http://") || token.starts_with("https://") {
+                    url = Some(token);
+                } else {
+                    model_id = Some(token);
+                }
+            }
+
+            let url = url.ok_or_else(|| anyhow::anyhow!(
+                "Could not detect a URL. Send both like:\n`https://your-api.example.com/v1 model-name`"
+            ))?;
+            let model_id = model_id.ok_or_else(|| anyhow::anyhow!(
+                "Could not detect a model ID. Send both like:\n`https://your-api.example.com/v1 model-name`"
+            ))?;
+
+            // Save endpoint + model
+            let mut ov = store.get("telegram", &user_id)?.unwrap_or_default();
+            ov.provider_type = Some(format!("custom/{}", subtype));
+            ov.base_url = Some(url.to_string());
+            ov.model_id = Some(model_id.to_string());
+            ov.updated_at = model::now_secs();
+            store.set("telegram", &user_id, &ov)?;
+
+            // Move to next step: ask for key
+            state.pending_model_flows.write().await.insert(chat_id, ModelFlowState::WaitingForKey);
+
+            let _ = send_markdown_message(
+                bot,
+                chat_id,
+                &format!(
+                    "Endpoint saved: `{}`\nModel: `{}`\n\nNow send your API key (just the key, nothing else).\nI will delete your message after saving it.",
+                    url, model_id
+                ),
+            ).await?;
+        }
+        ModelFlowState::WaitingForKey => {
+            let key = text.trim();
+            if key.is_empty() || key.len() < 4 {
+                // Put the flow state back so they can retry
+                state.pending_model_flows.write().await.insert(chat_id, ModelFlowState::WaitingForKey);
+                let _ = send_markdown_message(bot, chat_id, "Key too short. Send your API key again.").await?;
+                return Ok(());
+            }
+
+            // Delete the message containing the key immediately
+            let _ = bot.delete_message(teloxide::types::ChatId(chat_id), msg_id).await;
+
+            // Save encrypted key
+            let mut ov = store.get("telegram", &user_id)?.unwrap_or_default();
+            let encrypted = store.encrypt_key(key)?;
+            ov.encrypted_api_key = Some(encrypted);
+            ov.updated_at = model::now_secs();
+            store.set("telegram", &user_id, &ov)?;
+
+            let masked = model::mask_key(key);
+            let summary = model::build_summary_for_user("telegram", &user_id, store)?;
+            let _ = send_markdown_message(
+                bot,
+                chat_id,
+                &format!(
+                    "API key saved: `{}`\n\n{}",
+                    masked, summary
+                ),
+            ).await?;
+        }
+    }
+
+    Ok(())
+}
+
 async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> ResponseResult<()> {
     let chat_id: i64 = msg.chat.id.0;
     let text = msg.text().unwrap_or("");
@@ -539,6 +683,22 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
         let _ = bot.delete_message(teloxide::types::ChatId(chat_id), msg.id).await;
         send_markdown_message(&bot, chat_id, "Your message was deleted for security (it contained a token/secret). Use `/token set <server> <KEY> <value>` to store tokens safely.").await?;
         return Ok(());
+    }
+
+    // Intercept model setup flow (custom endpoint steps)
+    {
+        let mut flows = state.pending_model_flows.write().await;
+        if let Some(flow) = flows.remove(&chat_id) {
+            drop(flows); // release lock before async work
+            match handle_model_flow(&bot, &state, chat_id, msg.id, text, flow).await {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    tracing::warn!("Model flow error: {e:?}");
+                    let _ = send_markdown_message(&bot, chat_id, &format!("Error: {}. Try /model again.", e)).await;
+                    return Ok(());
+                }
+            }
+        }
     }
 
     if text.trim_start().starts_with("/persona") {
