@@ -665,18 +665,12 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
         return Ok(());
     }
 
-    // Auto-delete messages containing secrets
-    if crate::commands::token::contains_secret(text) {
-        let _ = bot.delete_message(teloxide::types::ChatId(chat_id), msg.id).await;
-        send_markdown_message(&bot, chat_id, "Your message was deleted for security (it contained a token/secret). Use `/token set <server> <KEY> <value>` to store tokens safely.").await?;
-        return Ok(());
-    }
-
-    // Intercept model setup flow (custom endpoint steps)
+    // Intercept model setup flow BEFORE any other check so endpoint/key
+    // messages aren't eaten by the secret scanner or treated as AI chat.
     {
         let mut flows = state.pending_model_flows.write().await;
         if let Some(flow) = flows.remove(&chat_id) {
-            drop(flows); // release lock before async work
+            drop(flows);
             match handle_model_flow(&bot, &state, chat_id, msg.id, text, flow).await {
                 Ok(()) => return Ok(()),
                 Err(e) => {
@@ -686,6 +680,13 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
                 }
             }
         }
+    }
+
+    // Auto-delete messages containing secrets
+    if crate::commands::token::contains_secret(text) {
+        let _ = bot.delete_message(teloxide::types::ChatId(chat_id), msg.id).await;
+        send_markdown_message(&bot, chat_id, "Your message was deleted for security (it contained a token/secret). Use `/token set <server> <KEY> <value>` to store tokens safely.").await?;
+        return Ok(());
     }
 
     if text.trim_start().starts_with("/persona") {
