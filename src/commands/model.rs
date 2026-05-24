@@ -347,7 +347,18 @@ fn build_summary(channel: &str, user_id: &str, ov: &UserModelOverride) -> String
     let provider_name = ov
         .provider_type
         .as_deref()
-        .and_then(|pt| find_provider(pt).map(|p| p.name))
+        .map(|pt| {
+            // Handle custom/ prefix
+            if let Some(sub) = pt.strip_prefix("custom/") {
+                if sub == "anthropic" {
+                    "Custom (Anthropic-style)"
+                } else {
+                    "Custom (OpenAI-compatible)"
+                }
+            } else {
+                find_provider(pt).map(|p| p.name).unwrap_or("(not set)")
+            }
+        })
         .unwrap_or("(not set)");
 
     let key_status = if ov.encrypted_api_key.is_some() {
@@ -527,5 +538,24 @@ mod tests {
 
         let ov = store.get("telegram", "6").unwrap().unwrap();
         assert_eq!(ov.base_url.as_deref(), Some("https://example.com/v1"));
+    }
+
+    #[test]
+    fn custom_provider_summary_friendly_name() {
+        let store = temp_store();
+        let mut ov = UserModelOverride::default();
+        ov.provider_type = Some("custom/anthropic".into());
+        ov.base_url = Some("https://my-api.com/v1".into());
+        ov.encrypted_api_key = Some("encrypted-key-placeholder".into());
+        ov.model_id = Some("claude-3".into());
+        store.set("telegram", "user", &ov).unwrap();
+        
+        let summary = handle_model(&store, "telegram", "user", "").unwrap();
+        assert!(summary.contains("Custom (Anthropic-style)"));
+        
+        ov.provider_type = Some("custom/openai-compatible".into());
+        store.set("telegram", "user", &ov).unwrap();
+        let summary = handle_model(&store, "telegram", "user", "").unwrap();
+        assert!(summary.contains("Custom (OpenAI-compatible)"));
     }
 }

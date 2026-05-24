@@ -482,7 +482,6 @@ async fn handle_callback_query(
         data,
     ) {
         Ok((response, keyboard, done)) => {
-            let _ = bot.answer_callback_query(q.id.clone()).await;
             let formatted = crate::channels::markdown::markdown_to_telegram(&response);
             let markup_str = keyboard.as_deref().unwrap_or("");
             if !markup_str.is_empty() {

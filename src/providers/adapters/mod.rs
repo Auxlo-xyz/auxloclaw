@@ -57,8 +57,10 @@ impl AdapterRegistry {
         adapters.insert("deepseek".into(), Box::new(openai::OpenAIAdapter::new()));
         adapters.insert("nvidia".into(), Box::new(openai::OpenAIAdapter::new()));
         adapters.insert("openai-compatible".into(), Box::new(openai::OpenAIAdapter::new()));
+        adapters.insert("custom/openai-compatible".into(), Box::new(openai::OpenAIAdapter::new()));
         adapters.insert("google".into(), Box::new(gemini::GeminiAdapter::new()));
         adapters.insert("anthropic".into(), Box::new(anthropic::AnthropicAdapter::new()));
+        adapters.insert("custom/anthropic".into(), Box::new(anthropic::AnthropicAdapter::new()));
         Self { adapters }
     }
 
