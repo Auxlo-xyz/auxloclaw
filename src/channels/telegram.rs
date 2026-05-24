@@ -484,13 +484,33 @@ async fn handle_callback_query(
         Ok((response, keyboard, done)) => {
             let formatted = crate::channels::markdown::markdown_to_telegram(&response);
             let markup_str = keyboard.as_deref().unwrap_or("");
-            if !markup_str.is_empty() {
-                let markup: teloxide::types::InlineKeyboardMarkup = serde_json::from_str(markup_str).unwrap_or_default();
-                let _ = bot
-                    .send_message(teloxide::types::ChatId(chat_id), &formatted)
+            let send_result = if markup_str.is_empty() {
+                bot.send_message(teloxide::types::ChatId(chat_id), &formatted)
+                    .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                    .await
+            } else {
+                let markup: teloxide::types::InlineKeyboardMarkup =
+                    serde_json::from_str(markup_str).unwrap_or_default();
+                bot.send_message(teloxide::types::ChatId(chat_id), &formatted)
                     .parse_mode(teloxide::types::ParseMode::MarkdownV2)
                     .reply_markup(markup)
-                    .await;
+                    .await
+            };
+            if let Err(ref e) = send_result {
+                tracing::warn!("MarkdownV2 send failed, retrying as plain text: {}", e);
+                // Retry without MarkdownV2 formatting
+                let plain = if markup_str.is_empty() {
+                    bot.send_message(teloxide::types::ChatId(chat_id), &response).await
+                } else {
+                    let markup: teloxide::types::InlineKeyboardMarkup =
+                        serde_json::from_str(markup_str).unwrap_or_default();
+                    bot.send_message(teloxide::types::ChatId(chat_id), &response)
+                        .reply_markup(markup)
+                        .await
+                };
+                if let Err(ref e2) = plain {
+                    tracing::error!("Plain text send also failed: {}", e2);
+                }
             }
             if done {
                 let _ = bot.answer_callback_query(q.id).await;
