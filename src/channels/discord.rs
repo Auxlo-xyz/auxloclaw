@@ -53,12 +53,29 @@ impl EventHandler for DiscordHandler {
 
             // We spawn a task to handle the agent processing so we don't block the gateway
             let agent = Arc::clone(&self.agent);
+            let model_store = Arc::clone(&self.model_store);
             let msg_channel = msg.channel_id;
             let http = ctx.http;
 
             let content_clone = content.clone();
             let code_mode = self.code_mode.clone();
             tokio::spawn(async move {
+                // Check for /model command
+                if content_clone.trim().starts_with("/model") {
+                    let args = content_clone.trim().strip_prefix("/model").unwrap_or("").trim();
+                    let response = crate::commands::model::handle_model(
+                        &model_store,
+                        "discord",
+                        &user_id.to_string(),
+                        args,
+                    )
+                    .unwrap_or_else(|e| format!("Error: {}", e));
+                    if let Err(e) = msg_channel.say(&http, &response).await {
+                        error!("Failed to send model response: {}", e);
+                    }
+                    return;
+                }
+
                 // Check for /code command
                 if content_clone.trim().starts_with("/code") {
                     let session_id = format!("discord-code-{}", user_id);

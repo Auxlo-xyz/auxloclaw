@@ -508,7 +508,7 @@ impl AgentCore {
             match (channel.as_deref(), user_id.as_deref()) {
                 (Some(ch), Some(uid)) => {
                     match crate::commands::model::resolve_user_model(&self.model_store, ch, uid) {
-                        Ok((base_url, api_key, Some(model))) => {
+                        Ok((_provider_type, base_url, api_key, Some(model))) => {
                             tracing::info!(
                                 "Using user model override: {} base={:?}",
                                 model, base_url
