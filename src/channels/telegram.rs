@@ -639,6 +639,9 @@ async fn handle_model_flow(
             ov.updated_at = model::now_secs();
             store.set("telegram", &user_id, &ov)?;
 
+            // Clear flow state -- done
+            state.pending_model_flows.write().await.remove(&chat_id);
+
             let masked = model::mask_key(key);
             let summary = model::build_summary_for_user("telegram", &user_id, store)?;
             let _ = send_markdown_message(

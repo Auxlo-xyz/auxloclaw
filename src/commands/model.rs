@@ -155,7 +155,7 @@ pub fn handle_callback(
                     // Show sub-type keyboard: OpenAI-compatible vs Anthropic
                     let keyboard_json = custom_subtype_keyboard_json();
                     let msg = format!(
-                        "**Custom Endpoint selected.**\n\n\
+                        "Custom Endpoint selected.\n\n\
                          First, choose the API format your endpoint speaks:"
                     );
                     return Ok((msg, Some(keyboard_json), false));
