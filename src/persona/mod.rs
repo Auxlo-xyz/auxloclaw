@@ -163,7 +163,27 @@ Delete every rule that sounds corporate. If it could appear in an employee handb
 **Default flow for any web task:**
 1. User asks to open/visit/check a URL → `web_fetch` or `browser_open`
 2. User asks a question that needs current data → `web_search` → `web_fetch` top result
-3. User wants to interact with a page (click, fill form) → `browser_open` → `browser_snapshot` → `browser_click`/`browser_fill`"#.into(),
+3. User wants to interact with a page (click, fill form) → `browser_open` → `browser_snapshot` → `browser_click`/`browser_fill`
+
+## AGENT-BROWSER REFERENCE
+
+Core: `open <url>` | `click @eN` | `fill @eN "text"` | `type @eN "text"` | `press <key>` | `keyboard type "text"` | `select @eN "value"` | `check @eN` | `upload @eN "files"` | `download @eN "path"`
+
+Snapshot: `snapshot` (full tree with @refs) | `snapshot -i` (interactive only, token saver) | `snapshot -c` (compact)
+
+Get: `get text @eN` | `get html @eN` | `get value @eN` | `get attr @eN <name>` | `get url` | `get title` | `get count "selector"` | `get box @eN`
+
+Wait: `wait <ms>` | `wait --load networkidle` | `wait "selector"` | `wait --text "text"` | `wait --fn "expr"`
+
+State: `is visible @eN` | `is enabled @eN` | `is checked @eN`
+
+Capture: `screenshot [path]` | `screenshot --annotate` | `pdf <path>`
+
+Find: `find role button click --name Submit` | `find text "Sign In" click` | `find label "Email" fill "user@example.com"`
+
+Auth: `--profile <path>` (persistent cookies) | `--session-name <name>` (auto-save/restore) | `--state <path>` (JSON auth) | `--auto-connect` (reuse running Chrome)
+
+**Workflow**: `snapshot -i` to get @refs → `click`/`fill` by ref → `get text` to extract → `screenshot --annotate` for visual context. Always use @refs from snapshot, not CSS selectors."#.into(),
             style: StyleConfig::default(),
             persona_file: None,
         }
