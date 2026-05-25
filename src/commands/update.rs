@@ -160,12 +160,16 @@ exec "{INSTALL_PATH}" gateway >> "$LOG_FILE" 2>&1
     // Spawn detached: use setsid so the restart script runs in its own session.
     // Without setsid, pkill in the script kills its own parent (the gateway)
     // and the kernel sends SIGHUP to the child, killing it before mv/exec.
-    let _ = Command::new("setsid")
+    let child = Command::new("setsid")
         .args(["/bin/sh", restart_path])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()?;
+    // Detach + reap to prevent zombie
+    tokio::task::spawn_blocking(move || {
+        let _ = child.wait_with_output();
+    });
 
     report.push_str(&format!(
         "Update to v{latest_ver} ready. Gateway will restart in ~5 seconds."
