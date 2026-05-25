@@ -1,5 +1,7 @@
 //! Agent Core - Central processing unit for the agent framework
 
+pub mod history;
+
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
