@@ -1,6 +1,6 @@
 [package]
 name = "auxloclaw"
-version = "0.6.5"
+version = "0.6.6"
 edition = "2021"
 authors = ["Auxlo.xyz <hello@auxlo.xyz>"]
 description = "Ultra-high-performance AI agent framework - beats Hermes and Nanobot"
@@ -14,6 +14,7 @@ bin-dir = "{ bin }{ binary-ext }"
 
 [dependencies]
 futures = "0.3"
+libc = "0.2"
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"

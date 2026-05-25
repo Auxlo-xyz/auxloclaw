@@ -255,6 +255,17 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
 
     info!("⚡ Core initialized in {:?}", start.elapsed());
 
+    // Zombie child reaper - reap orphaned child processes every 30s
+    #[cfg(unix)]
+    tokio::spawn(async {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            unsafe {
+                while libc::waitpid(-1, std::ptr::null_mut(), libc::WNOHANG) > 0 {}
+            }
+        }
+    });
+
     // Spawn reflection monitor background task
     let monitor_agent = agent.clone();
     tokio::spawn(async move {
