@@ -55,7 +55,7 @@ fn mask_secret(value: &str) -> String {
             "*".repeat(value.len())
         }
     } else {
-        format!("{}...{}", &value[..4], &value[value.len()-4..])
+        format!("{}...{}", &value[..value.floor_char_boundary(4)], &value[value.floor_char_boundary(value.len()-4)..])
     }
 }
 

@@ -625,7 +625,8 @@ impl AgentCore {
     pub async fn new_session(&self, session_id: &str) -> Result<()> {
         let mut sessions = self.sessions.write().await;
         sessions.insert(session_id.to_string(), SessionHistory::new(session_id));
-        let session = sessions.get(session_id).cloned().unwrap();
+        let session = sessions.get(session_id).cloned()
+            .ok_or_else(|| anyhow::anyhow!("session not found after insert: {}", session_id))?;
         drop(sessions);
         self.session_store.save(session_id, &session)?;
         Ok(())

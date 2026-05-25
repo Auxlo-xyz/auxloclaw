@@ -128,8 +128,7 @@ async fn main() -> anyhow::Result<()> {
 
         Commands::Mcp { args } => {
             let args_str = args.join(" ");
-            let rt = tokio::runtime::Runtime::new()?;
-            match rt.block_on(crate::commands::mcp::handle_mcp(&args_str, None)) {
+            match crate::commands::mcp::handle_mcp(&args_str, None).await {
                 Ok(result) => println!("{}", result),
                 Err(e) => eprintln!("Error: {}", e),
             }

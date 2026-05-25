@@ -67,7 +67,7 @@ main() {
     # Install webserp (multi-engine web search, no API key)
     if ! command -v webserp &>/dev/null; then
         echo "Installing webserp (web search engine)..."
-        pip install webserp -q 2>/dev/null || echo "Warning: webserp install failed (manual: pip install webserp)"
+        pip install webserp -q 2>&1 | tail -5 || echo "Warning: webserp install failed (manual: pip install webserp)"
     fi
 
     echo "Browser: agent-browser (by Vercel)"
