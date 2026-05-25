@@ -315,7 +315,7 @@ app_token = ""
 exec_enabled = true
 exec_timeout_secs = 60
 restrict_to_workspace = true
-web_search_enabled = false
+web_search_enabled = true
 web_search_provider = "brave"
 
 [server]
