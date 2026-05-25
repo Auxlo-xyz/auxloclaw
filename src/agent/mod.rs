@@ -263,7 +263,7 @@ impl AgentCore {
                                 let result = self.execute_tool(tool_call).await;
                                 let success = !result.starts_with("Tool error:");
                                 let summary = if result.len() > 500 {
-                                    format!("{}...", &result[..500])
+                                    format!("{}...", &result[..result.floor_char_boundary(500)])
                                 } else {
                                     result.clone()
                                 };
