@@ -226,7 +226,7 @@ Conversation:
 
             // Truncate very long messages
             let content = if msg.content.len() > 500 {
-                format!("{}... [truncated]", &msg.content[..500])
+                format!("{}... [truncated]", &msg.content[..msg.content.floor_char_boundary(500)])
             } else {
                 msg.content.clone()
             };

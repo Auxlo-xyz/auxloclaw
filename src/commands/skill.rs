@@ -43,7 +43,7 @@ pub async fn handle_skill(action: crate::cli::SkillCommands) -> Result<()> {
                                     "  {} - {}",
                                     skill.name(),
                                     if skill.description().len() > 60 {
-                                        format!("{}...", &skill.description()[..57])
+                                        format!("{}...", &skill.description()[..skill.description().floor_char_boundary(57)])
                                     } else {
                                         skill.description().to_string()
                                     }
@@ -181,7 +181,7 @@ pub async fn handle_skill(action: crate::cli::SkillCommands) -> Result<()> {
                         installed,
                         skill.name,
                         if skill.description.len() > 50 {
-                            format!("{}...", &skill.description[..47])
+                            format!("{}...", &skill.description[..skill.description.floor_char_boundary(47)])
                         } else {
                             skill.description.clone()
                         }
