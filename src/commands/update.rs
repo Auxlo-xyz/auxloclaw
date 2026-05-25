@@ -122,13 +122,25 @@ pkill -f 'auxloclaw gateway' 2>/dev/null
 # Give the process time to exit cleanly
 sleep 2
 
-# Step B: replace the binary
+# Step B: back up old binary, then replace
+if [ -f "{INSTALL_PATH}" ]; then
+    cp "{INSTALL_PATH}" "{INSTALL_PATH}.bak"
+fi
 mv "{tmp_path}" "{INSTALL_PATH}"
 chmod +x "{INSTALL_PATH}"
 
 # Step C: verify the new binary works
 NEW_VER=$("{INSTALL_PATH}" --version 2>/dev/null || echo "unknown")
+if [ "$NEW_VER" = "unknown" ]; then
+    echo "auxloclaw-updater: new binary failed verification, rolling back..." >&2
+    if [ -f "{INSTALL_PATH}.bak" ]; then
+        mv "{INSTALL_PATH}.bak" "{INSTALL_PATH}"
+        chmod +x "{INSTALL_PATH}"
+    fi
+    exit 1
+fi
 echo "auxloclaw-updater: installed $NEW_VER, starting gateway..." >&2
+rm -f "{INSTALL_PATH}.bak"
 
 # Step D: restart the gateway with logging
 LOG_DIR="$HOME/.auxloclaw/logs"
