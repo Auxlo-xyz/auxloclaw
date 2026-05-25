@@ -332,10 +332,10 @@ enabled = true
         provider,
         api_base,
         api_key,
-        telegram_token.is_some(),
-        telegram_token.unwrap_or(""),
-        discord_token.is_some(),
-        discord_token.unwrap_or("")
+        telegram_token.is_some() && telegram_token.unwrap_or("").trim().is_empty() == false,
+        telegram_token.unwrap_or("").trim(),
+        discord_token.is_some() && discord_token.unwrap_or("").trim().is_empty() == false,
+        discord_token.unwrap_or("").trim()
     );
 
     // Add GitHub MCP server if token provided

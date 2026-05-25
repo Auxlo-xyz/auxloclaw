@@ -70,7 +70,10 @@ impl AdapterRegistry {
 
     pub fn get_or_default(&self, provider_type: &str) -> &dyn ProviderAdapter {
         self.get(provider_type).unwrap_or_else(|| {
-            self.adapters.get("openai-compatible").unwrap().as_ref()
+            self.adapters.get("openai-compatible")
+                .or_else(|| self.adapters.values().next())
+                .expect("no provider adapters registered")
+                .as_ref()
         })
     }
 }

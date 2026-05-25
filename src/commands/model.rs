@@ -411,9 +411,11 @@ fn format_help() -> String {
 /// Mask an API key for display: show first 4 and last 4 chars.
 pub fn mask_key(key: &str) -> String {
     if key.len() <= 12 {
-        format!("{}***", &key[..4.min(key.len())])
+        let end = 4.min(key.len());
+        format!("{}***", &key[..key.floor_char_boundary(end)])
     } else {
-        format!("{}***{}", &key[..4], &key[key.len() - 4..])
+        let start = key.floor_char_boundary(key.len() - 4);
+        format!("{}***{}", &key[..key.floor_char_boundary(4)], &key[start..])
     }
 }
 
