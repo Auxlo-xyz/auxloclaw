@@ -130,8 +130,12 @@ chmod +x "{INSTALL_PATH}"
 NEW_VER=$("{INSTALL_PATH}" --version 2>/dev/null || echo "unknown")
 echo "auxloclaw-updater: installed $NEW_VER, starting gateway..." >&2
 
-# Step D: restart the gateway (exec replaces this shell process)
-exec "{INSTALL_PATH}" gateway
+# Step D: restart the gateway with logging
+LOG_DIR="$HOME/.auxloclaw/logs"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/gateway.log"
+echo "auxloclaw-updater: logs -> $LOG_FILE" >&2
+exec "{INSTALL_PATH}" gateway >> "$LOG_FILE" 2>&1
 "#,
         tmp_path = tmp_path,
         INSTALL_PATH = INSTALL_PATH,
