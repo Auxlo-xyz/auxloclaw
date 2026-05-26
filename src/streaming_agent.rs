@@ -1,6 +1,7 @@
 //! Streaming Agent - Async generator pattern for real-time tool execution
 //! Based on Claude Code's architecture
 
+use crate::agent::build_nudge_message;
 use anyhow::Result;
 use regex::Regex;
 use std::collections::HashMap;
@@ -170,6 +171,8 @@ impl StreamingAgent {
 
             let mut iterations = 0;
             let max_iterations = config.agent.max_tool_iterations as usize;
+            let nudge_threshold = config.agent.nudge_after_tool_calls;
+            let mut total_tool_calls: u32 = 0;
             let mut accumulated_text = String::new();
 
             // Register intervention channel for this session
@@ -356,6 +359,16 @@ impl StreamingAgent {
                     }
 
                     let _ = tx.send(AgentEvent::ToolRoundComplete).await;
+
+                    // Count tool calls and check nudge threshold
+                    total_tool_calls += pending_tool_calls.len() as u32;
+                    if nudge_threshold > 0 && total_tool_calls >= nudge_threshold {
+                        let nudge = build_nudge_message(total_tool_calls);
+                        messages.push(Message::new("user", &nudge));
+                        total_tool_calls = 0;
+                        tracing::info!("Nudge injected after {} tool calls (streaming)", nudge_threshold);
+                    }
+
                     continue;
                 }
 

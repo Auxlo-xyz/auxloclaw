@@ -90,7 +90,20 @@ pub struct ToolInfo {
     pub description: String,
 }
 
-/// Agent core
+/// Build a strict nudge message injected when the agent has made too many
+/// tool calls without updating the user.
+pub(crate) fn build_nudge_message(tool_call_count: u32) -> String {
+    format!(
+        "[NUDGE] You have made {} tool calls without updating the user. \
+         You MUST now call the `send_message` tool to report your current \
+         progress to the user. Be concise — state what you have done so far \
+         and what remains. Then continue working on the task until it is \
+         complete. Do NOT stop after the message — keep going.",
+        tool_call_count
+    )
+}
+
+/// Core agent state
 pub struct AgentCore {
     config: AppConfig,
     memory: Arc<MemoryEngine>,
@@ -283,6 +296,8 @@ impl AgentCore {
         // Tool execution loop
         let mut iterations = 0;
         let max_iterations = self.config.agent.max_tool_iterations as usize;
+        let nudge_threshold = self.config.agent.nudge_after_tool_calls;
+        let mut total_tool_calls: u32 = 0;
         let mut final_response = String::new();
         let mut tool_trace: Vec<ToolTraceEntry> = Vec::new();
 
@@ -325,6 +340,7 @@ impl AgentCore {
                             // Execute each tool
                             for tool_call in tool_calls {
                                 let result = self.execute_tool(tool_call).await;
+                                total_tool_calls += 1;
                                 let success = !result.starts_with("Tool error:");
                                 let summary = if result.len() > 500 {
                                     format!("{}...", &result[..result.floor_char_boundary(500)])
@@ -345,6 +361,14 @@ impl AgentCore {
                                     &tool_call.function.name,
                                     &result,
                                 ));
+                            }
+
+                            // Check if nudge threshold crossed
+                            if nudge_threshold > 0 && total_tool_calls >= nudge_threshold {
+                                let nudge = build_nudge_message(total_tool_calls);
+                                messages.push(Message::new("user", &nudge));
+                                total_tool_calls = 0;
+                                tracing::info!("Nudge injected after {} tool calls", nudge_threshold);
                             }
 
                             tracing::debug!("Continuing loop with {} messages", messages.len());
