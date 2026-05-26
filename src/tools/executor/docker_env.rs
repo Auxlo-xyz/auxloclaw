@@ -76,7 +76,7 @@ impl DockerEnvironment {
             anyhow::bail!("Docker daemon is not responding. Ensure Docker is running.");
         }
 
-        let container_name = format!("auxloclaw-{}", Uuid::new_v4().to_string()[..8]);
+        let container_name = format!("auxloclaw-{}", &Uuid::new_v4().to_string()[..8]);
 
         Ok(Self {
             config,
