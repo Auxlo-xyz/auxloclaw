@@ -221,6 +221,14 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     raw_plugins.set_tools(raw_orchestrator.list_tools());
     let plugins = Arc::new(raw_plugins);
     raw_orchestrator.set_plugins(plugins.clone());
+
+    // Create message router for cross-platform proactive messaging
+    let mut message_router = tools::MessageRouter::new();
+    if config.channels.telegram.enabled {
+        message_router.set_default_platform("telegram".to_string());
+    }
+    raw_orchestrator.register_send_message_tool(message_router.clone());
+
     let orchestrator = Arc::new(raw_orchestrator);
     if config.mcp.enabled {
         let count = orchestrator.register_mcp_tools(&config.mcp).await?;
@@ -311,9 +319,10 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
         let tg_agent = agent.clone();
         let tg_config = config.channels.telegram.clone();
         let tg_persona = config.persona.clone();
+        let tg_router = Arc::new(message_router);
         info!("📱 Starting Telegram gateway...");
         Some(tokio::spawn(async move {
-            if let Err(e) = channels::telegram::start(tg_agent, model_store.clone(), code_mode.clone(), Some(tg_config), tg_persona).await {
+            if let Err(e) = channels::telegram::start(tg_agent, model_store.clone(), code_mode.clone(), Some(tg_config), tg_persona, Some(tg_router)).await {
                 tracing::error!("Telegram error: {}", e);
             }
         }))

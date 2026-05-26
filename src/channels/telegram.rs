@@ -197,6 +197,7 @@ pub async fn start(
     code_mode: Arc<crate::memory::CodeModeStore>,
     config: Option<TelegramConfig>,
     _persona: crate::persona::PersonaConfig,
+    message_router: Option<Arc<crate::tools::MessageRouter>>,
 ) -> Result<()> {
     let config = config.ok_or_else(|| anyhow!("Telegram config required"))?;
     if !config.enabled || config.token.is_empty() {
@@ -205,6 +206,20 @@ pub async fn start(
     }
 
     let bot = Bot::new(config.token.clone());
+
+    // Register Telegram adapter with message router if provided
+    if let Some(router) = message_router {
+        // Try to use first allowed user as default chat ID
+        let default_chat_id = config.allowed_users.first()
+            .and_then(|u| u.parse::<i64>().ok());
+        let adapter = Arc::new(crate::tools::TelegramAdapter::new(
+            bot.clone(),
+            default_chat_id,
+        ));
+        router.register(adapter).await;
+        tracing::info!("Telegram registered with message router");
+    }
+
     let state = Arc::new(TelegramState::new(agent, model_store, code_mode, config));
 
     let commands = vec![
