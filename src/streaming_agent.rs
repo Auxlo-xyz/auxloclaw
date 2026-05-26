@@ -15,6 +15,7 @@ use crate::orchestrator::ToolOrchestrator;
 use crate::persona::SystemPromptBuilder;
 use crate::persona::{shared::load_current_persona, PersonaConfig};
 use crate::providers::{CompletionRequest, Message, ProviderPool, StreamChunk, ToolCall};
+use crate::agent::{Intervention, InterventionRegistry};
 
 /// Agent events streamed to consumers
 #[derive(Debug, Clone)]
@@ -74,6 +75,7 @@ pub struct StreamingAgent {
     persona: PersonaConfig,
     sessions: Arc<RwLock<HashMap<String, SessionHistory>>>,
     session_store: Arc<SessionStore>,
+    intervention_registry: Arc<InterventionRegistry>,
 }
 
 impl StreamingAgent {
@@ -82,6 +84,7 @@ impl StreamingAgent {
         providers: Arc<ProviderPool>,
         orchestrator: Arc<ToolOrchestrator>,
         session_store: Arc<SessionStore>,
+        intervention_registry: Arc<InterventionRegistry>,
     ) -> Self {
         let persona = load_current_persona().unwrap_or_else(|err| {
             tracing::warn!(
@@ -97,6 +100,7 @@ impl StreamingAgent {
             persona,
             sessions: Arc::new(RwLock::new(HashMap::new())),
             session_store,
+            intervention_registry,
         }
     }
 
@@ -136,6 +140,7 @@ impl StreamingAgent {
             self.persona.clone()
         });
         let message = message.to_string(); // Clone for 'static lifetime
+        let intervention_registry = self.intervention_registry.clone();
 
         tokio::spawn(async move {
             // Build system prompt
@@ -167,8 +172,16 @@ impl StreamingAgent {
             let max_iterations = config.agent.max_tool_iterations as usize;
             let mut accumulated_text = String::new();
 
+            // Register intervention channel for this session
+            let mut intervention_rx = intervention_registry.register(&session_key).await;
+
             loop {
                 iterations += 1;
+                // Drain any mid-loop interventions
+                while let Ok(intervention) = intervention_rx.try_recv() {
+                    messages.push(Message::new("user", &intervention.message));
+                    tracing::debug!("Intervention injected into streaming session {}", session_key);
+                }
                 if iterations > max_iterations {
                     let _ = tx
                         .send(AgentEvent::Error("Max tool iterations reached".into()))
@@ -374,6 +387,8 @@ impl StreamingAgent {
                 let _ = tx.send(AgentEvent::Done { response: filtered }).await;
                 break;
             }
+            // Unregister intervention channel
+            intervention_registry.unregister(&session_key).await;
         });
 
         rx

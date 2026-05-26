@@ -24,6 +24,7 @@ use crate::plugins::{HookEvent, PluginManager};
 use crate::providers::{CompletionRequest, Message, ProviderPool, ToolCall};
 use crate::skills::{ExtractorConfig, SkillExtractor, ToolTraceEntry};
 use regex::Regex;
+use tokio::sync::mpsc;
 use dirs;
 
 /// Usage statistics
@@ -31,6 +32,56 @@ use dirs;
 pub struct Usage {
     pub total_messages: u64,
     pub total_tokens: u64,
+}
+
+/// Mid-loop intervention: a user message injected while the agent is running.
+#[derive(Debug, Clone)]
+pub struct Intervention {
+    pub message: String,
+}
+
+/// Global registry of active intervention channels per session.
+/// Channels send interventions into the running agent loop.
+pub struct InterventionRegistry {
+    senders: RwLock<HashMap<String, mpsc::Sender<Intervention>>>,
+}
+
+impl InterventionRegistry {
+    pub fn new() -> Self {
+        Self {
+            senders: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Register a session as actively running (call at loop start).
+    pub async fn register(&self, session_key: &str) -> mpsc::Receiver<Intervention> {
+        let (tx, rx) = mpsc::channel(16);
+        let mut senders = self.senders.write().await;
+        senders.insert(session_key.to_string(), tx);
+        rx
+    }
+
+    /// Unregister when loop ends.
+    pub async fn unregister(&self, session_key: &str) {
+        let mut senders = self.senders.write().await;
+        senders.remove(session_key);
+    }
+
+    /// Inject a message into a running agent loop. Returns false if session is not active.
+    pub async fn inject(&self, session_key: &str, message: String) -> bool {
+        let senders = self.senders.read().await;
+        if let Some(tx) = senders.get(session_key) {
+            tx.send(Intervention { message }).await.is_ok()
+        } else {
+            false
+        }
+    }
+
+    /// Check if a session currently has an active loop.
+    pub async fn is_active(&self, session_key: &str) -> bool {
+        let senders = self.senders.read().await;
+        senders.contains_key(session_key)
+    }
 }
 
 /// Tool info
@@ -56,6 +107,8 @@ pub struct AgentCore {
     plugins: Arc<PluginManager>,
     checkpoint_manager: Arc<CheckpointManager>,
     extractor: Arc<SkillExtractor>,
+    /// Intervention registry for mid-loop message injection
+    pub intervention_registry: Arc<InterventionRegistry>,
     /// Last activity timestamp per session (epoch seconds)
     last_activity: RwLock<HashMap<String, u64>>,
     /// Channel name of the current request (set per-request)
@@ -131,6 +184,7 @@ impl AgentCore {
             plugins,
             checkpoint_manager,
             extractor,
+            intervention_registry: Arc::new(InterventionRegistry::new()),
             last_activity: RwLock::new(HashMap::new()),
             current_channel: parking_lot::RwLock::new(Option::<String>::None),
             current_user_id: parking_lot::RwLock::new(Option::<String>::None),
@@ -223,6 +277,9 @@ impl AgentCore {
             self.config.agent.context_window_tokens,
         );
 
+        // Register intervention channel for this session
+        let mut intervention_rx = self.intervention_registry.register(&session_key).await;
+
         // Tool execution loop
         let mut iterations = 0;
         let max_iterations = self.config.agent.max_tool_iterations as usize;
@@ -231,6 +288,11 @@ impl AgentCore {
 
         loop {
             iterations += 1;
+            // Drain any mid-loop interventions (user messages injected while running)
+            while let Ok(intervention) = intervention_rx.try_recv() {
+                messages.push(Message::new("user", &intervention.message));
+                tracing::debug!("Intervention injected into session {}", session_key);
+            }
             if iterations > max_iterations {
                 final_response = "Error: Max tool iterations reached".into();
                 break;
@@ -302,6 +364,9 @@ impl AgentCore {
                 }
             }
         }
+
+        // Unregister intervention channel
+        self.intervention_registry.unregister(&session_key).await;
 
         // Store in history
         self.add_to_history(&session_key, "user", &effective_message)
