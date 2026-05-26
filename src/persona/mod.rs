@@ -340,7 +340,7 @@ impl SystemPromptBuilder {
             desc.push_str("- **Search the web** using webserp (multi-engine: Google, DuckDuckGo, Brave, Yahoo, Mojeek, Startpage, Presearch. No API key required)\n");
             desc.push_str("- **Fetch full page content** via agent-browser engine\n");
             desc.push_str("- **Fetch tweets** from X/Twitter by ID\n");
-            desc.push_str("- **Send messages proactively** to the user via Telegram or Discord mid-task (progress updates, milestones, status reports)\n\n");
+            desc.push_str("- **Send messages proactively** to the user via connected platforms mid-task (progress updates, milestones, status reports)\n\n");
             desc.push_str("You should proactively use these capabilities. Do NOT say you cannot do something if you have a tool for it.\n");
             desc.push_str("Be confident in your abilities. You are not a passive assistant - you are an autonomous agent.\n");
             desc.push_str("\n**For long-running tasks:** Use send_message to update the user periodically. Do not wait for the full response cycle to report progress.\n");
@@ -446,11 +446,12 @@ impl SystemPromptBuilder {
             }
             "send_message" => {
                 formatted.push_str("  Usage: {\"tool\": \"send_message\", \"arguments\": {\"action\": \"send\", \"platform\": \"telegram\", \"message\": \"Status update...\"}}\n");
-                formatted.push_str("  - Send: {\"action\": \"send\", \"platform\": \"telegram\" or \"discord\", \"message\": \"text\"}\n");
-                formatted.push_str("  - List: {\"action\": \"list\", \"platform\": \"telegram\" or \"discord\"}\n");
+                formatted.push_str("  - Send: {\"action\": \"send\", \"platform\": \"telegram\", \"message\": \"text\"}\n");
+                formatted.push_str("  - List: {\"action\": \"list\"}\n");
                 formatted.push_str("  - Use to send progress updates, milestone notifications, or status reports to the user mid-task\n");
                 formatted.push_str("  - Messages auto-chunk at platform limits (4096 chars for Telegram)\n");
                 formatted.push_str("  - Non-blocking: agent continues execution after sending\n");
+                formatted.push_str("  - Optional: {\"parse_mode\": \"markdown\"} for Telegram MarkdownV2 formatting\n");
             }
             _ => {
                 formatted.push_str(&format!(

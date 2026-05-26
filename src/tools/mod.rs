@@ -7,4 +7,4 @@ pub mod web;
 
 pub use builtin::*;
 pub use executor::{ExecuteCodeTool, ExecuteParallelTool};
-pub use send_message::{MessageRouter, SendMessageTool, PlatformAdapter, MessageTarget};
+pub use send_message::{MessageRouter, SendMessageTool, PlatformAdapter, MessageTarget, TelegramAdapter};
