@@ -34,6 +34,7 @@ pub use environment::{
 pub use local_env::LocalEnvironment;
 pub use docker_env::DockerEnvironment;
 pub use ssh_env::SshEnvironment;
+pub use sandbox::{Sandbox, SandboxConfig, Limits};
 
 /// Result from code execution
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -21,25 +21,34 @@ use tokio::process::Command;
 
 use super::environment::Environment;
 
-/// Environment variables that must never leak into child processes.
-/// These contain secrets, API keys, or internal state that should
-/// not be accessible to user code.
-const BLOCKED_ENV_VARS: &[&str] = &[
-    "AUXLOCLAW_API_KEY",
-    "AUXLOCLAW_NVIDIA_API_KEY",
-    "OPENAI_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "GOOGLE_API_KEY",
-    "DEEPSEEK_API_KEY",
-    "MISTRAL_API_KEY",
-    "GROQ_API_KEY",
-    "XAI_API_KEY",
-    "TOGETHER_API_KEY",
-    "PERPLEXITY_API_KEY",
-    "FIREWORKS_API_KEY",
-    "FIRECRAWL_API_KEY",
-    "OPENROUTER_API_KEY",
-    "NANGO_SECRET_KEY",
+/// Environment variables that are safe to pass to child processes.
+/// All others are stripped to prevent secret leaks.
+const ALLOWED_ENV_VARS: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "SHELL",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TERM",
+    "COLORTERM",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "HOSTNAME",
+    "PWD",
+    "OLDPWD",
+    "SHLVL",
+    "_",
+    "DISPLAY",
+    "XDG_RUNTIME_DIR",
+    "XDG_DATA_DIRS",
+    "XDG_CONFIG_DIRS",
+    "DEBIAN_FRONTEND",
+    "CI",
+    "GITHUB_ACTIONS",
+    "AUXLOCLAW_DOCKER_BINARY",
 ];
 
 /// Local host execution environment.
@@ -51,14 +60,14 @@ pub struct LocalEnvironment {
     cwd: PathBuf,
     /// Additional environment variables to set (applied after sanitization).
     env: std::collections::HashMap<String, String>,
-    /// Pre-computed blocked env var set for O(1) lookup.
-    blocked: HashSet<&'static str>,
+    /// Pre-computed allowed env var set for O(1) lookup.
+    allowed: HashSet<&'static str>,
 }
 
 impl LocalEnvironment {
     pub fn new(cwd: PathBuf, env: std::collections::HashMap<String, String>) -> Self {
-        let blocked: HashSet<&'static str> = BLOCKED_ENV_VARS.iter().copied().collect();
-        Self { cwd, env, blocked }
+        let allowed: HashSet<&'static str> = ALLOWED_ENV_VARS.iter().copied().collect();
+        Self { cwd, env, allowed }
     }
 
     /// Check if a path exists and is a directory, walking up to find
@@ -110,19 +119,17 @@ impl Environment for LocalEnvironment {
             // Create new process group so we can kill all children on timeout
             .process_group(0);
 
-        // Apply sanitized environment: clear all, then set safe vars + extras
+        // Apply sanitized environment: clear all, then set allowed vars + extras
         cmd.env_clear();
-        // Pass through essential non-secret vars
+        // Pass through only explicitly allowed vars
         for (key, value) in std::env::vars() {
-            if !self.blocked.contains(key.as_str()) {
+            if self.allowed.contains(key.as_str()) {
                 cmd.env(&key, &value);
             }
         }
-        // Apply additional env from config
+        // Apply additional env from config (user-explicit, always allowed)
         for (key, value) in &self.env {
-            if !self.blocked.contains(key.as_str()) {
-                cmd.env(key, value);
-            }
+            cmd.env(key, value);
         }
 
         let start = std::time::Instant::now();

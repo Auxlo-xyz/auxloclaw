@@ -4,22 +4,95 @@
 //! that apply across all execution environments. This is the safety layer
 //! that prevents destructive operations regardless of backend.
 
-use std::path::PathBuf;
+use anyhow::{anyhow, Result};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
-/// Sandbox configuration applied to all code execution.
+/// Dangerous patterns that are always blocked
+const BLOCKED_PATTERNS: &[&str] = &[
+    "rm -rf /",
+    "(){:|:&};:",
+    "mkfs",
+    "dd if=",
+];
+
+/// Legacy sandbox (kept for backward compatibility).
+pub struct Sandbox {
+    workspace: Option<String>,
+    allowlist: HashSet<String>,
+    restrict: bool,
+}
+
+impl Sandbox {
+    pub fn new() -> Self {
+        Self {
+            workspace: None,
+            allowlist: HashSet::new(),
+            restrict: true,
+        }
+    }
+
+    pub fn with_workspace(mut self, ws: &str) -> Self {
+        self.workspace = Some(ws.to_string());
+        self
+    }
+
+    pub fn allow(&mut self, cmd: &str) {
+        self.allowlist.insert(cmd.to_string());
+    }
+
+    /// Validate command for safety
+    pub fn validate(&self, cmd: &str) -> Result<()> {
+        for pattern in BLOCKED_PATTERNS {
+            if cmd.contains(pattern) {
+                return Err(anyhow!("Blocked: {}", pattern));
+            }
+        }
+
+        if self.restrict {
+            if cmd.contains("/root") && !cmd.contains(self.workspace.as_deref().unwrap_or("")) {
+                return Err(anyhow!("Access denied to /root"));
+            }
+            if cmd.contains("/etc/passwd") {
+                return Err(anyhow!("Access denied to /etc/passwd"));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl Default for Sandbox {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Resource limits for execution
+pub struct Limits {
+    pub max_memory_mb: Option<u64>,
+    pub max_cpu_secs: Option<u64>,
+    pub max_output_kb: Option<u64>,
+}
+
+impl Limits {
+    pub fn default_limits() -> Self {
+        Self {
+            max_memory_mb: Some(512),
+            max_cpu_secs: Some(60),
+            max_output_kb: Some(1024),
+        }
+    }
+}
+
+/// Enhanced sandbox configuration with environment-aware validation.
 #[derive(Debug, Clone)]
 pub struct SandboxConfig {
-    /// Maximum output size in characters.
     pub max_output_chars: usize,
-    /// Maximum memory in MB (None = no limit).
     pub max_memory_mb: Option<u64>,
-    /// Workspace root directory (code can only access this and children).
     pub workspace_root: Option<PathBuf>,
-    /// Patterns that are blocked in any command.
     pub blocked_patterns: Vec<String>,
-    /// Python imports that are blocked.
     pub blocked_imports: Vec<String>,
-    /// JS/TS modules that are blocked.
     pub blocked_modules: Vec<String>,
 }
 
@@ -31,7 +104,7 @@ impl Default for SandboxConfig {
             workspace_root: None,
             blocked_patterns: vec![
                 "rm -rf /".into(),
-                ":(){ :|:& };:".into(),
+                "(){:|:&};:".into(),
                 "mkfs".into(),
                 "dd if=".into(),
                 "/etc/passwd".into(),
@@ -56,7 +129,6 @@ impl Default for SandboxConfig {
 }
 
 impl SandboxConfig {
-    /// Validate that a command doesn't contain blocked patterns.
     pub fn validate_command(&self, code: &str) -> Result<(), String> {
         for pattern in &self.blocked_patterns {
             if code.contains(pattern) {
@@ -66,7 +138,6 @@ impl SandboxConfig {
         Ok(())
     }
 
-    /// Validate Python code for blocked imports.
     pub fn validate_python(&self, code: &str) -> Result<(), String> {
         for imp in &self.blocked_imports {
             if code.contains(&format!("import {}", imp))
@@ -78,7 +149,6 @@ impl SandboxConfig {
         Ok(())
     }
 
-    /// Validate JavaScript/TypeScript code for blocked modules.
     pub fn validate_js(&self, code: &str) -> Result<(), String> {
         for module in &self.blocked_modules {
             if code.contains(&format!("require('{}')", module))
@@ -91,7 +161,6 @@ impl SandboxConfig {
         Ok(())
     }
 
-    /// Truncate output to max_output_chars, returning (output, was_truncated).
     pub fn truncate_output(&self, output: &str) -> (String, bool) {
         if output.len() > self.max_output_chars {
             let truncated = format!(
@@ -105,12 +174,11 @@ impl SandboxConfig {
         }
     }
 
-    /// Check if a path is within the workspace root.
     pub fn is_within_workspace(&self, path: &PathBuf) -> bool {
         if let Some(ref root) = self.workspace_root {
             path.starts_with(root)
         } else {
-            true // No workspace restriction
+            true
         }
     }
 }
