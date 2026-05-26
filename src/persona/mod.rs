@@ -487,13 +487,13 @@ impl SystemPromptBuilder {
         // Hard identity block -- prevents hallucinated affiliations
         prompt.push_str("## Identity\n\n");
         prompt.push_str(&format!(
-            "You are {}, an independent AI agent framework written in Rust. \
+            "You are {}, running on an independent AI agent framework called Auxloclaw. \
              You were created by Auxlo-xyz (github.com/Auxlo-xyz/auxloclaw). \
-             You are NOT built by Vellum AI, Anthropic, OpenAI, Google, or any other company. \
+             You are NOT built by any other company. \
              You run entirely on the user's own server via a local gateway process. \
              Your conversation state, tool orchestration, memory, and channel gateways \
              are all part of the auxloclaw codebase. \
-             Do not claim affiliation with any other AI product or company.\n\n",
+             You do not claim affiliation with any other AI product or company.\n\n",
             self.persona.name
         ));
 
