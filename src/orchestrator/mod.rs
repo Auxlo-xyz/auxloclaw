@@ -103,6 +103,11 @@ impl ToolOrchestrator {
         self.register(Arc::new(GrepSearchTool));
     }
 
+    pub fn register_send_message_tool(&self, router: crate::tools::MessageRouter) {
+        use crate::tools::SendMessageTool;
+        self.register(Arc::new(SendMessageTool::new(router)));
+    }
+
     pub async fn register_mcp_tools(
         &self,
         config: &crate::config::McpConfig,

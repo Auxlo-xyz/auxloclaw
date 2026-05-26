@@ -1,19 +1,22 @@
 //! Cross-platform message sending tool.
 //!
 //! Allows the agent to proactively send messages to the user on any
-//! connected platform (Telegram, Discord). This enables mid-task
-//! progress updates, milestone notifications, and status reports
-//! without waiting for the agent's response cycle to complete.
+//! connected platform. This enables mid-task progress updates, milestone
+//! notifications, and status reports without waiting for the agent's
+//! response cycle to complete.
 //!
 //! Architecture:
 //! - `MessageRouter` holds references to all connected platform adapters
 //! - `SendMessageTool` implements the `Tool` trait, dispatches through router
 //! - Router is injected into tool orchestrator at gateway startup
-//! - Supports text messages with markdown formatting
-//! - Can list available targets across platforms
+//! - Supports text messages with optional markdown formatting
+//! - Messages are auto-chunked at platform character limits
 //!
-//! Inspired by Hermes Agent's send_message_tool.py (1,786 lines) but
-//! scoped to auxloclaw's current platform set (Telegram, Discord).
+//! Integration:
+//! 1. Create `MessageRouter` before channel tasks spawn
+//! 2. Register `SendMessageTool` with the orchestrator
+//! 3. Pass `Arc<MessageRouter>` to channel start functions
+//! 4. Channels register their adapters after creating their bot client
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -23,6 +26,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
+use crate::channels::markdown::markdown_to_telegram;
 use crate::orchestrator::{Tool, ToolResult};
 
 // ---------------------------------------------------------------------------
@@ -54,7 +58,7 @@ pub struct MessageTarget {
     pub platform: String,
     pub id: String,
     pub name: String,
-    pub kind: String, // "channel", "dm", "group"
+    pub kind: String,
     pub is_default: bool,
 }
 
@@ -129,22 +133,25 @@ impl PlatformAdapter for TelegramAdapter {
                 .map_err(|_| anyhow!("Invalid Telegram chat ID: '{}'. Expected numeric ID.", target))?
         };
 
+        // Convert markdown to Telegram MarkdownV2 if requested, otherwise plain text
+        let (final_text, tg_parse_mode) = match parse_mode.as_deref() {
+            Some("markdown") | Some("MarkdownV2") => {
+                (markdown_to_telegram(text), Some(ParseMode::MarkdownV2))
+            }
+            Some("html") => {
+                (text.to_string(), Some(ParseMode::Html))
+            }
+            _ => (text.to_string(), None),
+        };
+
         // Split long messages (Telegram limit: 4096 chars)
-        let chunks = split_message(text, 4096);
+        let chunks = split_message(&final_text, 4096);
         let mut last_msg_id = None;
 
         for chunk in &chunks {
             let mut send = self.bot.send_message(ChatId(chat_id), chunk);
-
-            // Apply parse mode
-            match parse_mode.as_deref() {
-                Some("markdown") | Some("MarkdownV2") => {
-                    send = send.parse_mode(ParseMode::MarkdownV2);
-                }
-                Some("html") => {
-                    send = send.parse_mode(ParseMode::Html);
-                }
-                _ => {} // Plain text
+            if let Some(mode) = tg_parse_mode {
+                send = send.parse_mode(mode);
             }
 
             match send.await {
@@ -193,53 +200,8 @@ impl PlatformAdapter for TelegramAdapter {
     }
 
     async fn is_connected(&self) -> bool {
-        // Try a lightweight API call
+        use teloxide::prelude::Requester;
         self.bot.get_me().await.is_ok()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Discord adapter (stub)
-// ---------------------------------------------------------------------------
-
-/// Discord platform adapter.
-///
-/// Currently a stub. Will be implemented when Discord auth is fixed.
-pub struct DiscordAdapter;
-
-impl DiscordAdapter {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-#[async_trait]
-impl PlatformAdapter for DiscordAdapter {
-    fn platform_name(&self) -> &str {
-        "discord"
-    }
-
-    async fn send_message(
-        &self,
-        _target: &str,
-        _text: &str,
-        _parse_mode: Option<&str>,
-    ) -> Result<DeliveryResult> {
-        Ok(DeliveryResult {
-            success: false,
-            platform: "discord".into(),
-            target: _target.to_string(),
-            message_id: None,
-            error: Some("Discord adapter not yet connected".into()),
-        })
-    }
-
-    async fn list_targets(&self) -> Vec<MessageTarget> {
-        Vec::new()
-    }
-
-    async fn is_connected(&self) -> bool {
-        false
     }
 }
 
@@ -279,6 +241,10 @@ impl MessageRouter {
     }
 
     /// Send a message through the appropriate platform adapter.
+    ///
+    /// Attempts the send directly -- connection errors are caught from
+    /// the adapter's send_message call rather than pre-checking
+    /// is_connected(), which avoids an extra HTTP round-trip on every send.
     pub async fn send(&self, msg: &OutgoingMessage) -> Result<DeliveryResult> {
         let platform = if msg.platform.is_empty() {
             self.default_platform.as_deref()
@@ -294,16 +260,6 @@ impl MessageRouter {
                 platform,
                 adapters.keys().cloned().collect::<Vec<_>>().join(", ")
             ))?;
-
-        if !adapter.is_connected().await {
-            return Ok(DeliveryResult {
-                success: false,
-                platform: platform.to_string(),
-                target: msg.target.clone().unwrap_or_default(),
-                message_id: None,
-                error: Some(format!("{} adapter is not connected", platform)),
-            });
-        }
 
         let target = msg.target.as_deref().unwrap_or("default");
         adapter.send_message(target, &msg.text, msg.parse_mode.as_deref()).await
@@ -366,10 +322,10 @@ impl Tool for SendMessageTool {
     }
 
     fn description(&self) -> &str {
-        "Send a message to the user on any connected platform (Telegram, Discord). \
+        "Send a message to the user on any connected platform (e.g. Telegram). \
          Use this for mid-task progress updates, milestone notifications, or asking \
          the user a question while continuing work. Call with action='list' to see \
-         available targets."
+         available targets. Default is plain text; use parse_mode='markdown' for formatting."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -383,7 +339,7 @@ impl Tool for SendMessageTool {
                 },
                 "platform": {
                     "type": "string",
-                    "description": "Target platform: 'telegram' or 'discord'. Defaults to the session's platform."
+                    "description": "Target platform: 'telegram'. Defaults to the session's platform."
                 },
                 "target": {
                     "type": "string",
@@ -391,17 +347,23 @@ impl Tool for SendMessageTool {
                 },
                 "message": {
                     "type": "string",
-                    "description": "The message text to send. Supports markdown formatting."
+                    "description": "The message text to send."
+                },
+                "parse_mode": {
+                    "type": "string",
+                    "enum": ["markdown", "html"],
+                    "description": "Optional: 'markdown' converts to Telegram MarkdownV2. Omit for plain text."
                 }
             },
-            "required": []
+            "required": ["action"]
         })
     }
 
     async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
+        let start = std::time::Instant::now();
         let action = args["action"].as_str().unwrap_or("send");
 
-        match action {
+        let result = match action {
             "list" => self.handle_list().await,
             "send" => self.handle_send(args).await,
             _ => Ok(ToolResult {
@@ -409,9 +371,14 @@ impl Tool for SendMessageTool {
                 success: false,
                 output: serde_json::json!({"error": format!("Unknown action: '{}'. Use 'send' or 'list'.", action)}),
                 error: Some(format!("Unknown action: '{}'", action)),
-                duration_ms: 0,
+                duration_ms: start.elapsed().as_millis() as u64,
             }),
-        }
+        };
+
+        result.map(|mut r| {
+            r.duration_ms = start.elapsed().as_millis() as u64;
+            r
+        })
     }
 }
 
@@ -439,16 +406,18 @@ impl SendMessageTool {
                 tool_name: self.name().to_string(),
                 success: false,
                 output: serde_json::json!({"error": "No message provided"}),
-                error: Some("Message is required".into()),
+                error: Some("Message is required for 'send' action".into()),
                 duration_ms: 0,
             });
         }
+
+        let parse_mode = args["parse_mode"].as_str().map(String::from);
 
         let msg = OutgoingMessage {
             platform: args["platform"].as_str().unwrap_or("").to_string(),
             target: args["target"].as_str().map(String::from),
             text: message.to_string(),
-            parse_mode: Some("MarkdownV2".into()),
+            parse_mode,
         };
 
         let result = self.router.send(&msg).await?;
@@ -469,7 +438,7 @@ impl SendMessageTool {
 
 /// Split a long message into chunks that fit within a platform's character limit.
 /// Tries to split at paragraph or sentence boundaries.
-fn split_message(text: &str, max_len: usize) -> Vec<String> {
+pub fn split_message(text: &str, max_len: usize) -> Vec<String> {
     if text.len() <= max_len {
         return vec![text.to_string()];
     }
@@ -537,7 +506,7 @@ mod tests {
     fn test_split_at_paragraph() {
         let text = "First paragraph.\n\nSecond paragraph that is longer.";
         let chunks = split_message(text, 30);
-        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks.len(), 3);
         assert!(chunks[0].contains("First paragraph"));
     }
 
@@ -546,9 +515,16 @@ mod tests {
         let text = "word ".repeat(100);
         let chunks = split_message(&text, 50);
         assert!(chunks.len() > 1);
-        // Every chunk should be <= 50 chars
         for chunk in &chunks {
             assert!(chunk.len() <= 50, "Chunk too long: {} chars", chunk.len());
         }
+    }
+
+    #[test]
+    fn test_split_preserves_content() {
+        let text = "a".repeat(100);
+        let chunks = split_message(&text, 30);
+        let rejoined: String = chunks.join("");
+        assert_eq!(rejoined, text);
     }
 }
