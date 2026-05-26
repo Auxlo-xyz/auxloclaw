@@ -31,6 +31,8 @@ pub struct AgentConfig {
     pub max_tokens: u32,
     pub temperature: f32,
     pub max_tool_iterations: u32,
+    #[serde(default = "default_nudge_after_tool_calls")]
+    pub nudge_after_tool_calls: u32,
     pub context_window_tokens: u32,
     #[serde(default = "default_recent_history_turns")]
     pub recent_history_turns: usize,
@@ -47,6 +49,7 @@ impl Default for AgentConfig {
             max_tokens: 8192,
             temperature: 1.0,
             max_tool_iterations: 100,
+            nudge_after_tool_calls: 10,
             context_window_tokens: 20000,
             recent_history_turns: 60,
             tool_output_max_chars: 4_000,
@@ -81,6 +84,9 @@ fn default_recent_history_turns() -> usize {
 }
 fn default_tool_output_max_chars() -> usize {
     4_000
+}
+fn default_nudge_after_tool_calls() -> u32 {
+    10
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
