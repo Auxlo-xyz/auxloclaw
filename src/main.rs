@@ -229,6 +229,11 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     }
     raw_orchestrator.register_send_message_tool(message_router.clone());
 
+    // Create sub-agent coordinator placeholder (populated after agent init)
+    let coordinator: Arc<tokio::sync::RwLock<Option<Arc<coordination::AgentCoordinator>>>> =
+        Arc::new(tokio::sync::RwLock::new(None));
+    raw_orchestrator.register_subagent_tool(coordinator.clone());
+
     let orchestrator = Arc::new(raw_orchestrator);
     if config.mcp.enabled {
         let count = orchestrator.register_mcp_tools(&config.mcp).await?;
@@ -257,6 +262,8 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
 
     // Load persisted sessions
     agent.load_sessions().await?;
+    
+    // Now initialize the sub-agent coordinator with all dependencies
 
     let _cron_scheduler =
         scheduler::CronScheduler::start(agent.clone(), config.scheduler.clone()).await?;

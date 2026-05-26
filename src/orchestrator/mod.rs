@@ -107,6 +107,10 @@ impl ToolOrchestrator {
         use crate::tools::SendMessageTool;
         self.register(Arc::new(SendMessageTool::new(router)));
     }
+    pub fn register_subagent_tool(&self, coordinator: Arc<tokio::sync::RwLock<Option<Arc<crate::coordination::AgentCoordinator>>>>) {
+        use crate::tools::subagent::DelegateToSubAgentTool;
+        self.register(Arc::new(DelegateToSubAgentTool::new(coordinator)));
+    }
 
     pub async fn register_mcp_tools(
         &self,

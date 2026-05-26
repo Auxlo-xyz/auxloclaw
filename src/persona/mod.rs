@@ -340,7 +340,8 @@ impl SystemPromptBuilder {
             desc.push_str("- **Search the web** using webserp (multi-engine: Google, DuckDuckGo, Brave, Yahoo, Mojeek, Startpage, Presearch. No API key required)\n");
             desc.push_str("- **Fetch full page content** via agent-browser engine\n");
             desc.push_str("- **Fetch tweets** from X/Twitter by ID\n");
-            desc.push_str("- **Send messages proactively** to the user via connected platforms mid-task (progress updates, milestones, status reports)\n\n");
+            desc.push_str("- **Send messages proactively** to the user via connected platforms mid-task (progress updates, milestones, status reports)\n");
+            desc.push_str("- **Delegate subtasks to sub-agents** that run in parallel, enabling concurrent research, coding, or analysis\n\n");
             desc.push_str("You should proactively use these capabilities. Do NOT say you cannot do something if you have a tool for it.\n");
             desc.push_str("Be confident in your abilities. You are not a passive assistant - you are an autonomous agent.\n");
             desc.push_str("\n**For long-running tasks:** Use send_message to update the user periodically. Do not wait for the full response cycle to report progress.\n");
@@ -452,6 +453,16 @@ impl SystemPromptBuilder {
                 formatted.push_str("  - Messages auto-chunk at platform limits (4096 chars for Telegram)\n");
                 formatted.push_str("  - Non-blocking: agent continues execution after sending\n");
                 formatted.push_str("  - Optional: {\"parse_mode\": \"markdown\"} for Telegram MarkdownV2 formatting\n");
+            }
+            "delegate_to_subagent" => {
+                formatted.push_str("  Usage: {\"tool\": \"delegate_to_subagent\", \"arguments\": {\"task\": \"Research X and summarize\", \"task_type\": \"research\", \"priority\": \"medium\"}}\n");
+                formatted.push_str("  - Delegate independent subtasks to a specialist sub-agent that runs in parallel\n");
+                formatted.push_str("  - task_type: \"research\", \"code\", \"analysis\", \"writing\", \"general\"\n");
+                formatted.push_str("  - priority: \"low\", \"medium\", \"high\", \"critical\"\n");
+                formatted.push_str("  - Sub-agent runs autonomously and returns a summary when done\n");
+                formatted.push_str("  - Use for parallelizing work: split complex tasks into independent pieces\n");
+                formatted.push_str("  - Sub-agents share the same tools and capabilities as the main agent\n");
+                formatted.push_str("  - Cost-aware: delegation is skipped if sub-agents are disabled in config\n");
             }
             _ => {
                 formatted.push_str(&format!(
