@@ -6,17 +6,34 @@
 //! - Resource limits (memory, CPU, timeouts)
 //! - Output truncation
 //! - Workspace restrictions
+//! - Environment abstraction (local, Docker, SSH)
+//! - Session snapshots and CWD tracking
+
+pub mod environment;
+pub mod local_env;
+pub mod docker_env;
+pub mod ssh_env;
+pub mod runtime;
+pub mod languages;
+pub mod sandbox;
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tokio::time::timeout;
 
 use crate::orchestrator::{Tool, ToolResult};
+
+pub use environment::{
+    ExecutionConfig, ExecutionEngine, ProcessOutput, Environment,
+    EnvironmentType, DockerEnvConfig, SshEnvConfig, TerminalConfig,
+};
+pub use local_env::LocalEnvironment;
+pub use docker_env::DockerEnvironment;
+pub use ssh_env::SshEnvironment;
 
 /// Result from code execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,41 +46,31 @@ pub struct ExecutionResult {
     pub truncated: bool,
 }
 
-/// Configuration for code execution
-#[derive(Clone)]
-pub struct ExecutionConfig {
-    pub timeout_secs: u64,
-    pub max_output_chars: usize,
-    pub max_memory_mb: Option<u64>,
-    pub workspace_root: Option<PathBuf>,
-    pub blocked_patterns: Vec<String>,
-    pub blocked_imports: Vec<String>,
-}
-
-impl Default for ExecutionConfig {
-    fn default() -> Self {
-        Self {
-            timeout_secs: 120,
-            max_output_chars: 100_000,
-            max_memory_mb: Some(512),
-            workspace_root: None,
-            blocked_patterns: vec![
-                "rm -rf /".into(),
-                ":(){ :|:& };:".into(),
-                "mkfs".into(),
-                "dd if=".into(),
-                "/etc/passwd".into(),
-                "/etc/shadow".into(),
-            ],
-            blocked_imports: vec![
-                "os".into(),
-                "sys".into(),
-                "subprocess".into(),
-                "socket".into(),
-                "requests".into(),
-                "urllib".into(),
-                "http.client".into(),
-            ],
+/// Create the appropriate environment from config.
+pub async fn create_environment(
+    config: &TerminalConfig,
+    workspace: &PathBuf,
+) -> Result<Box<dyn Environment>> {
+    match config.environment {
+        EnvironmentType::Local => {
+            Ok(Box::new(LocalEnvironment::new(
+                workspace.clone(),
+                std::collections::HashMap::new(),
+            )))
+        }
+        EnvironmentType::Docker => {
+            let mut docker = DockerEnvironment::new(
+                config.docker.clone(),
+                workspace.clone(),
+            ).await?;
+            docker.start(workspace).await?;
+            Ok(Box::new(docker))
+        }
+        EnvironmentType::Ssh => {
+            Ok(Box::new(SshEnvironment::new(
+                config.ssh.clone(),
+                workspace.clone(),
+            )))
         }
     }
 }
@@ -86,7 +93,15 @@ impl ExecuteCodeTool {
 
     fn validate(&self, code: &str, lang: &str) -> Result<()> {
         // Check blocked patterns
-        for pattern in &self.config.blocked_patterns {
+        let blocked_patterns = [
+            "rm -rf /",
+            ":(){ :|:& };:",
+            "mkfs",
+            "dd if=",
+            "/etc/passwd",
+            "/etc/shadow",
+        ];
+        for pattern in &blocked_patterns {
             if code.contains(pattern) {
                 return Err(anyhow!("Blocked pattern detected: {}", pattern));
             }
@@ -103,7 +118,8 @@ impl ExecuteCodeTool {
     }
 
     fn validate_python(&self, code: &str) -> Result<()> {
-        for imp in &self.config.blocked_imports {
+        let blocked = ["os", "sys", "subprocess", "socket", "requests", "urllib", "http.client"];
+        for imp in &blocked {
             if code.contains(&format!("import {}", imp))
                 || code.contains(&format!("from {} import", imp))
             {
@@ -144,7 +160,6 @@ impl ExecuteCodeTool {
         lang: &str,
         code: &str,
     ) -> Result<ExecutionResult> {
-        // Validate
         tracing::debug!("execute_code: lang={}, code_len={}", lang, code.len());
         if let Err(e) = self.validate(code, lang) {
             tracing::warn!("Validation failed: {}", e);
@@ -169,7 +184,7 @@ impl ExecuteCodeTool {
         };
 
         let start = Instant::now();
-        let duration = Duration::from_secs(self.config.timeout_secs);
+        let duration = Duration::from_secs(self.config.timeout.as_secs());
 
         // Execute with timeout
         let output = timeout(duration, async {
@@ -199,7 +214,7 @@ impl ExecuteCodeTool {
                 })
             }
             Ok(Err(e)) => Err(anyhow!("Execution failed: {}", e)),
-            Err(_) => Err(anyhow!("Execution timed out after {}s", self.config.timeout_secs)),
+            Err(_) => Err(anyhow!("Execution timed out after {}s", self.config.timeout.as_secs())),
         }
     }
 }
@@ -247,7 +262,7 @@ impl Tool for ExecuteCodeTool {
 
         let mut config = self.config.clone();
         if let Some(t) = timeout_override {
-            config.timeout_secs = t;
+            config.timeout = Duration::from_secs(t);
         }
 
         let tool = ExecuteCodeTool::with_config(config);
@@ -340,13 +355,11 @@ impl Tool for ExecuteParallelTool {
             });
         }
 
-        // Execute all in parallel
         let start = Instant::now();
         let futures: Vec<_> = cmds.iter().map(|cmd| async {
             let lang = cmd.language.as_deref().unwrap_or("shell");
-            let exec = ExecuteCodeTool::new();
             let exec_config = ExecutionConfig {
-                timeout_secs: timeout_override,
+                timeout: Duration::from_secs(timeout_override),
                 ..Default::default()
             };
             let tool = ExecuteCodeTool::with_config(exec_config);
