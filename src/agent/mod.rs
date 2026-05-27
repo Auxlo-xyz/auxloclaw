@@ -277,13 +277,27 @@ impl AgentCore {
         tracing::debug!("{}", &system_prompt[..system_prompt.len().min(500)]);
         tracing::debug!("=== SYSTEM PROMPT END ===");
         if !reflections.is_empty() {
-            system_prompt.push_str("\n\n## Recent Reflections\nOnly the newest bounded reflections are included to avoid context bloat.\n");
+            system_prompt.push_str("\n\n## Recent Reflections\nThese are structured observations from your past sessions. They represent what you have learned.\n\nHow to use them:\n- If a reflection has a behavioralNote, follow it. This is a correction from the user.\n- If a reflection has an approachThatFailed, do not repeat that approach.\n- If a reflection has an approachThatWorked, try that strategy again.\n- If a reflection has userPreferences, honor them in your responses.\n- If a reflection says completed: false, the task was not finished. Be aware of what was left undone.\n- These are not suggestions. They are lessons. Treat them as authoritative.\n");
             for reflection in reflections.iter().take(3) {
-                let serialized =
-                    serde_json::to_string(reflection).unwrap_or_else(|_| reflection.title.clone());
-                system_prompt.push_str("- ");
-                system_prompt
-                    .push_str(&truncate_for_summary(&serialized, 1_000).replace('\n', " "));
+                let r = reflection;
+                let outcome = match r.completed.as_str() {
+                    "true" => "completed",
+                    "false" => "incomplete",
+                    "partial" => "partial",
+                    other => other,
+                };
+                let next = if !r.next_steps.is_empty() {
+                    format!("Next: {}", r.next_steps.join("; "))
+                } else {
+                    String::new()
+                };
+                let behavioral = r.behavioral_note.as_ref().map(|n| format!("\n  Behavioral note: {}", n)).unwrap_or_default();
+                let avoid = r.approach_that_failed.as_ref().map(|a| format!("\n  Avoid: {}", a)).unwrap_or_default();
+                let use_str = r.approach_that_worked.as_ref().map(|a| format!("\n  Use: {}", a)).unwrap_or_default();
+                system_prompt.push_str(&format!(
+                    "\n- [{}] {}\n  Goal: {}\n  Outcome: {}{}{}{}{}",
+                    r.reflection_type, r.title, r.user_goal, outcome, next, behavioral, avoid, use_str,
+                ));
                 system_prompt.push('\n');
             }
         }

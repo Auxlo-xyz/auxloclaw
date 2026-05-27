@@ -18,6 +18,8 @@ pub enum ReflectionType {
     Feature,
     Research,
     Question,
+    Habit,
+    Preference,
     Other,
 }
 
@@ -28,6 +30,8 @@ impl std::fmt::Display for ReflectionType {
             ReflectionType::Feature => write!(f, "feature"),
             ReflectionType::Research => write!(f, "research"),
             ReflectionType::Question => write!(f, "question"),
+            ReflectionType::Habit => write!(f, "habit"),
+            ReflectionType::Preference => write!(f, "preference"),
             ReflectionType::Other => write!(f, "other"),
         }
     }
@@ -45,6 +49,14 @@ pub struct Reflection {
     pub completed: String,
     #[serde(rename = "nextSteps")]
     pub next_steps: Vec<String>,
+    #[serde(rename = "userPreferences", default, skip_serializing_if = "Option::is_none")]
+    pub user_preferences: Option<String>,
+    #[serde(rename = "approachThatWorked", default, skip_serializing_if = "Option::is_none")]
+    pub approach_that_worked: Option<String>,
+    #[serde(rename = "approachThatFailed", default, skip_serializing_if = "Option::is_none")]
+    pub approach_that_failed: Option<String>,
+    #[serde(rename = "behavioralNote", default, skip_serializing_if = "Option::is_none")]
+    pub behavioral_note: Option<String>,
     pub session_id: String,
     pub message_count: usize,
     pub created_at: u64,
@@ -199,17 +211,23 @@ impl Reflector {
         }
 
         let mut prompt = String::from(
-            r#"Analyze this recent bounded conversation window and produce a structured reflection.
+            r#"Analyze this session. Output JSON with:
+- type: bugfix | feature | research | question | habit | preference | other
+- title: class-level description, not session-specific
+- userGoal: what the user was trying to accomplish
+- narrative: what happened, what worked, what failed
+- completed: "true" | "false" | "partial"
+- nextSteps: actionable items (max 3)
+- userPreferences: anything the user explicitly likes or dislikes
+- approachThatWorked: method that succeeded (if any)
+- approachThatFailed: method that didn't work and should be avoided
+- behavioralNote: if the user corrected, frustrated, or pushed back, describe what the agent should do differently next time
 
-You MUST respond with ONLY valid JSON in this exact format:
-{
-  "type": "bugfix|feature|research|question|other",
-  "title": "Short descriptive title",
-  "narrative": "Brief narrative of what happened",
-  "userGoal": "What the user was trying to accomplish",
-  "completed": "What was successfully completed",
-  "nextSteps": ["Step 1", "Step 2"]
-}
+Be specific. "Install agent-browser" is actionable. "Fix the issue" is not.
+
+If the user said "stop doing X" or "don't format like Y", capture that as a behavioralNote.
+
+If no learning was gained, return {"type":"other","title":"No significant learning","completed":"true"}
 
 Conversation:
 "#,
@@ -317,6 +335,10 @@ Conversation:
                 .to_string(),
             completed: parsed["completed"].as_str().unwrap_or("").to_string(),
             next_steps: self.parse_next_steps(&parsed["nextSteps"]),
+            user_preferences: parsed["userPreferences"].as_str().map(|s| s.to_string()),
+            approach_that_worked: parsed["approachThatWorked"].as_str().map(|s| s.to_string()),
+            approach_that_failed: parsed["approachThatFailed"].as_str().map(|s| s.to_string()),
+            behavioral_note: parsed["behavioralNote"].as_str().map(|s| s.to_string()),
             session_id: session_id.to_string(),
             message_count,
             created_at: now,
@@ -363,6 +385,8 @@ Conversation:
             Some("feature") => ReflectionType::Feature,
             Some("research") => ReflectionType::Research,
             Some("question") => ReflectionType::Question,
+            Some("habit") => ReflectionType::Habit,
+            Some("preference") => ReflectionType::Preference,
             Some("other") | Some(_) | None => ReflectionType::Other,
         }
     }
