@@ -317,7 +317,7 @@ impl StreamingAgent {
                                 })
                                 .await;
 
-                            messages.push(Message::tool_result(id.clone(), name.clone(), crate::context::truncate_for_summary(&result_str, config.agent.tool_output_max_chars)));
+                            messages.push(Message::tool_result(id.clone(), name.clone(), crate::context::spill_tool_output(&result_str, config.agent.tool_output_max_chars, &name)));
                         }
                     }
 
@@ -355,7 +355,7 @@ impl StreamingAgent {
                                 .await;
                         }
 
-                        messages.push(Message::tool_result(tc.id.clone(), tc.function.name.clone(), crate::context::truncate_for_summary(&result_str, config.agent.tool_output_max_chars)));
+                        messages.push(Message::tool_result(tc.id.clone(), tc.function.name.clone(), crate::context::spill_tool_output(&result_str, config.agent.tool_output_max_chars, &tc.function.name)));
                     }
 
                     let _ = tx.send(AgentEvent::ToolRoundComplete).await;

@@ -2,6 +2,10 @@
 
 use crate::memory::HistoryMessage;
 use crate::providers::Message;
+use std::fs;
+use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
+use shellexpand;
 
 const DEFAULT_RECENT_TURNS: usize = 10;
 const MAX_SUMMARY_CHARS: usize = 1_200;
@@ -38,6 +42,46 @@ pub fn truncate_for_summary(text: &str, max_chars: usize) -> String {
         head,
         text.chars().count().saturating_sub(keep_each_side * 2),
         tail
+    )
+}
+
+pub fn spill_tool_output(output: &str, max_chars: usize, tool_name: &str) -> String {
+    let char_count = output.chars().count();
+    if char_count <= max_chars {
+        return output.to_string();
+    }
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let tool_name_clean: String = tool_name
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect();
+    let filename = format!("{}_{}.log", tool_name_clean, nanos);
+    let dir = shellexpand::tilde("~/.auxloclaw/tool_output");
+    let dir_path = Path::new(dir.as_ref());
+    if let Err(e) = fs::create_dir_all(dir_path) {
+        tracing::warn!("Failed to create tool output spill directory: {}", e);
+    }
+    let path = dir_path.join(&filename);
+    if let Err(e) = fs::write(&path, output) {
+        tracing::warn!("Failed to write tool output spill file: {}", e);
+    } else {
+        tracing::info!(
+            "Tool output spilled: {} chars -> {} (full output at {:?})",
+            char_count,
+            max_chars,
+            path
+        );
+    }
+
+    let head: String = output.chars().take(max_chars).collect();
+    let spilled = char_count - max_chars;
+    format!(
+        "{}\n...[truncated {} of {} chars — full output: {:?}]",
+        head, spilled, char_count, path
     )
 }
 
@@ -272,5 +316,36 @@ mod tests {
         // Should keep recent 6 messages (3 turns * 2) + summary + user msg
         let sys = messages[0].content.as_deref().unwrap_or("");
         assert!(sys.contains("Earlier conversation summary") || messages.len() <= 8);
+    }
+
+    #[test]
+    fn spill_tool_output_test() {
+        // 1) Small output passes through unchanged
+        let small = "short output";
+        let small_result = spill_tool_output(small, 100, "test_tool");
+        assert_eq!(small_result, small);
+
+        // 2) Large output gets truncated with spill file reference
+        let large = "a".repeat(1000);
+        let large_result = spill_tool_output(&large, 50, "test_tool");
+        assert!(large_result.starts_with(&"a".repeat(50)));
+        assert!(large_result.contains("[truncated"));
+        assert!(large_result.contains("tool_output"));
+
+        // 3) A spill file was created with full content
+        let dir = shellexpand::tilde("~/.auxloclaw/tool_output");
+        let dir_path = Path::new(dir.as_ref());
+        let entries: Vec<_> = fs::read_dir(dir_path)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let n = e.file_name().to_string_lossy().to_string();
+                n.starts_with("test_tool_") && n.ends_with(".log")
+            })
+            .collect();
+        assert!(!entries.is_empty(), "Expected at least one spill file");
+        let content = fs::read_to_string(entries.last().unwrap().path()).unwrap();
+        assert_eq!(content, large);
     }
 }

@@ -52,7 +52,7 @@ impl Default for AgentConfig {
             nudge_after_tool_calls: 10,
             context_window_tokens: 20000,
             recent_history_turns: 60,
-            tool_output_max_chars: 4_000,
+            tool_output_max_chars: 10_000,
             timezone: "UTC".into(),
         }
     }
@@ -83,7 +83,7 @@ fn default_recent_history_turns() -> usize {
     60
 }
 fn default_tool_output_max_chars() -> usize {
-    4_000
+    10_000
 }
 fn default_nudge_after_tool_calls() -> u32 {
     10

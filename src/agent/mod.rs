@@ -361,11 +361,15 @@ impl AgentCore {
                                     iteration: iterations,
                                 });
 
-                                // Add tool result as a message
+                                // Add tool result as a message (truncated + spilled if oversized)
                                 messages.push(Message::tool_result(
                                     &tool_call.id,
                                     &tool_call.function.name,
-                                    &result,
+                                    &crate::context::spill_tool_output(
+                                        &result,
+                                        self.config.agent.tool_output_max_chars,
+                                        &tool_call.function.name,
+                                    ),
                                 ));
                             }
 
