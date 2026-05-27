@@ -88,6 +88,11 @@ impl ToolOrchestrator {
         self.register(Arc::new(XFetchTool));
     }
 
+    pub fn register_schedule_tool(&self, log: crate::scheduler::ScheduleRunLog) {
+        use crate::tools::builtin::ListScheduledJobsTool;
+        self.register(Arc::new(ListScheduledJobsTool::new(log)));
+    }
+
     pub fn register_code_tools(&self) {
         use crate::tools::code::{
             ReadFileTool, ListFilesTool, EditFileTool, EditFileLlmTool,

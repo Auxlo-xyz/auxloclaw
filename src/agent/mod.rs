@@ -103,6 +103,18 @@ pub(crate) fn build_nudge_message(tool_call_count: u32) -> String {
     )
 }
 
+fn format_duration(secs: u64) -> String {
+    if secs < 60 {
+        format!("{}s", secs)
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h", secs / 3600)
+    } else {
+        format!("{}d", secs / 86400)
+    }
+}
+
 /// Core agent state
 pub struct AgentCore {
     config: AppConfig,
@@ -133,6 +145,8 @@ pub struct AgentCore {
     /// When true, skip loading persona from disk and use config.persona directly.
     /// Used by /code mode to enforce the coding agent persona.
     override_system_prompt: Arc<RwLock<Option<String>>>,
+    /// Shared run log from the cron scheduler (if started)
+    schedule_log: Option<crate::scheduler::ScheduleRunLog>,
 }
 
 impl AgentCore {
@@ -148,6 +162,7 @@ impl AgentCore {
         plugins: Arc<PluginManager>,
         checkpoint_manager: Arc<CheckpointManager>,
         subagent_context: Arc<parking_lot::RwLock<(Option<String>, Option<String>)>>,
+        schedule_log: Option<crate::scheduler::ScheduleRunLog>,
     ) -> Result<Self> {
         let persona = load_current_persona().unwrap_or_else(|err| {
             tracing::warn!(
@@ -206,6 +221,7 @@ impl AgentCore {
             current_user_id: parking_lot::RwLock::new(Option::<String>::None),
             subagent_context,
             override_system_prompt: Arc::new(RwLock::new(None)),
+            schedule_log,
         })
     }
 
@@ -299,6 +315,39 @@ impl AgentCore {
                     r.reflection_type, r.title, r.user_goal, outcome, next, behavioral, avoid, use_str,
                 ));
                 system_prompt.push('\n');
+            }
+        }
+
+        // Inject active scheduled jobs status
+        if let Some(ref log) = self.schedule_log {
+            if let Ok(guard) = log.read() {
+                if !guard.is_empty() {
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    system_prompt.push_str("\n\n## Active Scheduled Jobs\nThese are recurring tasks you manage. You are aware of their existence and status. If the user asks about them, use this information.\n");
+                    for entry in guard.values() {
+                        let status = if entry.last_run_at == 0 {
+                            "never ran".to_string()
+                        } else {
+                            let ago = format_duration(now.saturating_sub(entry.last_run_at));
+                            let outcome = if entry.last_success { "success" } else { "failed" };
+                            format!("{} ago | {} | run #{}", ago, outcome, entry.run_count)
+                        };
+                        let result_line = if !entry.last_result_summary.is_empty() {
+                            format!("\n  Result: \"{}\"", entry.last_result_summary)
+                        } else {
+                            String::new()
+                        };
+                        let enabled_str = if entry.enabled { "" } else { " [DISABLED]" };
+                        system_prompt.push_str(&format!(
+                            "\n- {}{} (cron: {})\n  Task: \"{}\"\n  Status: {}{}",
+                            entry.name, enabled_str, entry.cron, entry.prompt_summary, status, result_line,
+                        ));
+                        system_prompt.push('\n');
+                    }
+                }
             }
         }
 

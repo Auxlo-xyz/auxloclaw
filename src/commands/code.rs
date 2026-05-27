@@ -326,6 +326,7 @@ pub async fn handle_code(
         plugins,
         checkpoint_manager,
         Arc::new(parking_lot::RwLock::new((None, None))),
+        None,
     )?);
     // Override the system prompt with the pure coding agent prompt - no persona bleeding
     let coding_prompt = build_code_system_prompt(&workspace);

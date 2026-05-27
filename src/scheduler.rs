@@ -8,12 +8,83 @@ use tokio_cron_scheduler::{Job, JobScheduler};
 use crate::agent::AgentCore;
 use crate::config::{ScheduleJobConfig, SchedulerConfig};
 
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::RwLock;
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::fs;
+use shellexpand;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduleRunEntry {
+    pub name: String,
+    pub cron: String,
+    pub prompt_summary: String,
+    pub last_run_at: u64,
+    pub last_result_summary: String,
+    pub last_success: bool,
+    pub run_count: u64,
+    pub enabled: bool,
+}
+
+pub type ScheduleRunLog = Arc<RwLock<HashMap<String, ScheduleRunEntry>>>;
+
+const STATE_FILE: &str = "~/.auxloclaw/schedule_state.json";
+
+fn load_state_file() -> HashMap<String, ScheduleRunEntry> {
+    let path = shellexpand::tilde(STATE_FILE);
+    match fs::read_to_string(path.as_ref()) {
+        Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+        Err(_) => HashMap::new(),
+    }
+}
+
+fn persist_state_file(log: &ScheduleRunLog) {
+    let path = shellexpand::tilde(STATE_FILE);
+    if let Ok(guard) = log.read() {
+        if let Ok(json) = serde_json::to_string_pretty(&*guard) {
+            let _ = fs::write(path.as_ref(), json);
+        }
+    }
+}
+
+/// Pre-populate a run log from config so entries exist before the first run fires.
+pub fn create_run_log(jobs: &[ScheduleJobConfig]) -> ScheduleRunLog {
+    let mut persisted = load_state_file();
+    let now = now_epoch();
+    let mut map = HashMap::new();
+
+    for job in jobs {
+        let entry = persisted.remove(&job.name).unwrap_or_else(|| ScheduleRunEntry {
+            name: job.name.clone(),
+            cron: job.cron.clone(),
+            prompt_summary: job.prompt.chars().take(100).collect(),
+            last_run_at: 0,
+            last_result_summary: String::new(),
+            last_success: false,
+            run_count: 0,
+            enabled: job.enabled,
+        });
+        map.insert(job.name.clone(), entry);
+    }
+
+    Arc::new(RwLock::new(map))
+}
+
+fn now_epoch() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 pub struct CronScheduler {
     scheduler: JobScheduler,
 }
 
 impl CronScheduler {
-    pub async fn start(agent: Arc<AgentCore>, config: SchedulerConfig) -> Result<Option<Self>> {
+    pub async fn start(agent: Arc<AgentCore>, config: SchedulerConfig, log: ScheduleRunLog) -> Result<Option<Self>> {
         if !config.enabled || config.jobs.is_empty() {
             return Ok(None);
         }
@@ -32,14 +103,16 @@ impl CronScheduler {
             let timeout_secs = job_config.timeout_secs;
             let run_on_startup = job_config.run_on_startup;
             let job_agent = agent.clone();
+            let job_log = log.clone();
 
             let job = Job::new_async(cron.as_str(), move |_uuid, _lock| {
                 let agent = job_agent.clone();
                 let name = name.clone();
                 let prompt = prompt.clone();
                 let session_id = session_id.clone();
+                let log = job_log.clone();
                 Box::pin(async move {
-                    run_scheduled_job(agent, name, prompt, session_id, timeout_secs).await;
+                    run_scheduled_job(agent, name, prompt, session_id, timeout_secs, log).await;
                 })
             })
             .with_context(|| format!("invalid cron expression for job {}", job_config.name))?;
@@ -54,6 +127,7 @@ impl CronScheduler {
                 let startup_name = job_config.name.clone();
                 let startup_prompt = job_config.prompt.clone();
                 let startup_session_id = job_config.session_id.clone();
+                let startup_log = log.clone();
                 tokio::spawn(async move {
                     run_scheduled_job(
                         startup_agent,
@@ -61,6 +135,7 @@ impl CronScheduler {
                         startup_prompt,
                         startup_session_id,
                         timeout_secs,
+                        startup_log,
                     )
                     .await;
                 });
@@ -95,17 +170,34 @@ async fn run_scheduled_job(
     prompt: String,
     session_id: Option<String>,
     timeout_secs: u64,
+    log: ScheduleRunLog,
 ) {
     tracing::info!("Running scheduled job: {}", name);
     let task = agent.process(&prompt, session_id.as_deref());
-    match timeout(Duration::from_secs(timeout_secs), task).await {
-        Ok(response) => tracing::info!(
-            "Scheduled job complete: {} ({})",
-            name,
-            summarize(&response)
-        ),
-        Err(_) => tracing::error!("Scheduled job timed out: {} after {}s", name, timeout_secs),
+    let result = timeout(Duration::from_secs(timeout_secs), task).await;
+
+    let (success, summary) = match &result {
+        Ok(response) => {
+            let s = summarize(response);
+            tracing::info!("Scheduled job complete: {} ({})", name, s);
+            (true, s)
+        }
+        Err(_) => {
+            tracing::error!("Scheduled job timed out: {} after {}s", name, timeout_secs);
+            (false, format!("timed out after {}s", timeout_secs))
+        }
+    };
+
+    // Update the shared run log
+    if let Ok(mut guard) = log.write() {
+        if let Some(entry) = guard.get_mut(&name) {
+            entry.last_run_at = now_epoch();
+            entry.last_result_summary = summary;
+            entry.last_success = success;
+            entry.run_count += 1;
+        }
     }
+    persist_state_file(&log);
 }
 
 fn validate_job(job: &ScheduleJobConfig) -> Result<()> {

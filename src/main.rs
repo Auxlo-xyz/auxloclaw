@@ -242,6 +242,10 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
 
     raw_orchestrator.register_subagent_tool(coordinator.clone(), model_store.clone(), subagent_context.clone());
 
+    // Schedule run log -- shared between orchestrator (tool) and agent (system prompt)
+    let schedule_log = scheduler::create_run_log(&config.scheduler.jobs);
+    raw_orchestrator.register_schedule_tool(schedule_log.clone());
+
     let orchestrator = Arc::new(raw_orchestrator);
     if config.mcp.enabled {
         let count = orchestrator.register_mcp_tools(&config.mcp).await?;
@@ -266,6 +270,7 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
         plugins.clone(),
         checkpoint_manager.clone(),
         subagent_context.clone(),
+        Some(schedule_log.clone()),
     )?);
 
     // Load persisted sessions
@@ -286,7 +291,7 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     tracing::info!("Sub-agent coordinator initialized");
 
     let _cron_scheduler =
-        scheduler::CronScheduler::start(agent.clone(), config.scheduler.clone()).await?;
+        scheduler::CronScheduler::start(agent.clone(), config.scheduler.clone(), schedule_log.clone()).await?;
 
     info!("⚡ Core initialized in {:?}", start.elapsed());
 
