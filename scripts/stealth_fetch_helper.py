@@ -37,7 +37,12 @@ def main():
                 page = fetcher.get(args.url, headers=extra_headers if extra_headers else None)
         else:
             # StealthyFetcher and DynamicFetcher use .fetch(url) method
-            page = fetcher.fetch(args.url)
+            if args.method != "GET":
+                print(f"Warning: stealth/dynamic mode only supports GET (got {args.method}); request sent as GET", file=sys.stderr)
+            fetch_kwargs = {}
+            if extra_headers:
+                fetch_kwargs["headers"] = extra_headers
+            page = fetcher.fetch(args.url, **fetch_kwargs)
 
         if args.selector:
             results = page.css(args.selector).getall()
@@ -47,7 +52,7 @@ def main():
                 print(json.dumps([]))
         else:
             # page.text may be empty; page.body (bytes) is reliable
-            if hasattr(page, 'body') and page.body:
+            if hasattr(page, 'body') and isinstance(page.body, bytes) and page.body:
                 text = page.body.decode('utf-8', errors='replace')
             elif hasattr(page, 'text') and page.text:
                 text = str(page.text)

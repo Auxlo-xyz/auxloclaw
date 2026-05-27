@@ -119,18 +119,11 @@ impl Tool for StealthFetchTool {
         }
 
         let result = stdout.trim().to_string();
-        let max_chars = 50_000;
-        let display = if result.len() > max_chars {
-            format!("{}...\n\n[Truncated: {} total chars, showing first {}]",
-                &result[..max_chars], result.len(), max_chars)
-        } else {
-            result
-        };
 
         Ok(ToolResult {
             tool_name: "stealth_fetch".to_string(),
             success: true,
-            output: serde_json::Value::String(display),
+            output: serde_json::Value::String(result),
             error: None,
             duration_ms,
         })
