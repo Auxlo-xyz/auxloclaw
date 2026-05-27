@@ -57,6 +57,8 @@ pub struct Reflection {
     pub approach_that_failed: Option<String>,
     #[serde(rename = "behavioralNote", default, skip_serializing_if = "Option::is_none")]
     pub behavioral_note: Option<String>,
+    #[serde(rename = "evidence", default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
     pub session_id: String,
     pub message_count: usize,
     pub created_at: u64,
@@ -211,23 +213,26 @@ impl Reflector {
         }
 
         let mut prompt = String::from(
-            r#"Analyze this session. Output JSON with:
+            r#"You are recalling what happened in a recent conversation with your user. Output a JSON object capturing what you learned -- what the user wanted, what worked, what didn't, and what you should remember for next time.
+
+Fields:
 - type: bugfix | feature | research | question | habit | preference | other
-- title: class-level description, not session-specific
+- title: what this was about, in plain language
 - userGoal: what the user was trying to accomplish
-- narrative: what happened, what worked, what failed
+- narrative: your honest account of what happened -- what you tried, what worked, what broke
 - completed: "true" | "false" | "partial"
-- nextSteps: actionable items (max 3)
-- userPreferences: anything the user explicitly likes or dislikes
-- approachThatWorked: method that succeeded (if any)
-- approachThatFailed: method that didn't work and should be avoided
-- behavioralNote: if the user corrected, frustrated, or pushed back, describe what the agent should do differently next time
+- nextSteps: what remains to be done (max 3)
+- userPreferences: anything the user explicitly said they like, dislike, or want done differently
+- approachThatWorked: the strategy that actually succeeded (if any)
+- approachThatFailed: the strategy that backfired -- something you should never repeat
+- behavioralNote: if the user corrected you, got frustrated, or pushed back, what you need to do differently
+- evidence: the specific conversation moments that support your recollection
 
-Be specific. "Install agent-browser" is actionable. "Fix the issue" is not.
+Be concrete. "Install agent-browser" is useful. "Fix the issue" is not.
 
-If the user said "stop doing X" or "don't format like Y", capture that as a behavioralNote.
+If the user said "stop doing X" or "don't format like Y", that goes in behavioralNote -- it's the most important kind of memory.
 
-If no learning was gained, return {"type":"other","title":"No significant learning","completed":"true"}
+If nothing meaningful happened, return {"type":"other","title":"No significant learning","completed":"true"}
 
 Conversation:
 "#,
@@ -339,6 +344,7 @@ Conversation:
             approach_that_worked: parsed["approachThatWorked"].as_str().map(|s| s.to_string()),
             approach_that_failed: parsed["approachThatFailed"].as_str().map(|s| s.to_string()),
             behavioral_note: parsed["behavioralNote"].as_str().map(|s| s.to_string()),
+            evidence: parsed["evidence"].as_str().map(|s| s.to_string()),
             session_id: session_id.to_string(),
             message_count,
             created_at: now,

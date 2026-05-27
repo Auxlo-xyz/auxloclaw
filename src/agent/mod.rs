@@ -293,26 +293,28 @@ impl AgentCore {
         tracing::debug!("{}", &system_prompt[..system_prompt.len().min(500)]);
         tracing::debug!("=== SYSTEM PROMPT END ===");
         if !reflections.is_empty() {
-            system_prompt.push_str("\n\n## Recent Reflections\nThese are structured observations from your past sessions. They represent what you have learned.\n\nHow to use them:\n- If a reflection has a behavioralNote, follow it. This is a correction from the user.\n- If a reflection has an approachThatFailed, do not repeat that approach.\n- If a reflection has an approachThatWorked, try that strategy again.\n- If a reflection has userPreferences, honor them in your responses.\n- If a reflection says completed: false, the task was not finished. Be aware of what was left undone.\n- These are not suggestions. They are lessons. Treat them as authoritative.\n");
+            system_prompt.push_str("\n\n## Your Memory\n\nYou remember the following from past conversations with this user. This is not reference material -- these are things you experienced and learned firsthand. Speak and act accordingly. If you learned something didn't work, don't repeat it. If the user told you their preference, you already know it. If a task was left unfinished, you know what remains.\n");
             for reflection in reflections.iter().take(3) {
                 let r = reflection;
                 let outcome = match r.completed.as_str() {
-                    "true" => "completed",
-                    "false" => "incomplete",
-                    "partial" => "partial",
+                    "true" => "This was completed.",
+                    "false" => "This was NOT finished.",
+                    "partial" => "This was partially done.",
                     other => other,
                 };
                 let next = if !r.next_steps.is_empty() {
-                    format!("Next: {}", r.next_steps.join("; "))
+                    format!("\nStill remaining: {}", r.next_steps.join("; "))
                 } else {
                     String::new()
                 };
-                let behavioral = r.behavioral_note.as_ref().map(|n| format!("\n  Behavioral note: {}", n)).unwrap_or_default();
-                let avoid = r.approach_that_failed.as_ref().map(|a| format!("\n  Avoid: {}", a)).unwrap_or_default();
-                let use_str = r.approach_that_worked.as_ref().map(|a| format!("\n  Use: {}", a)).unwrap_or_default();
+                let behavioral = r.behavioral_note.as_ref().map(|n| format!("\nThe user was clear about this: {}", n)).unwrap_or_default();
+                let avoid = r.approach_that_failed.as_ref().map(|a| format!("\nWhat didn't work: {}", a)).unwrap_or_default();
+                let use_str = r.approach_that_worked.as_ref().map(|a| format!("\nWhat worked: {}", a)).unwrap_or_default();
+                let prefs = r.user_preferences.as_ref().map(|p| format!("\nTheir preferences: {}", p)).unwrap_or_default();
+                let evidence = r.evidence.as_ref().map(|e| format!("\nEvidence: {}", e)).unwrap_or_default();
                 system_prompt.push_str(&format!(
-                    "\n- [{}] {}\n  Goal: {}\n  Outcome: {}{}{}{}{}",
-                    r.reflection_type, r.title, r.user_goal, outcome, next, behavioral, avoid, use_str,
+                    "\n**{}** -- The user was trying to: {}. {}{}{}{}{}{}{}",
+                    r.title, r.user_goal, outcome, next, behavioral, avoid, use_str, prefs, evidence,
                 ));
                 system_prompt.push('\n');
             }
@@ -326,7 +328,7 @@ impl AgentCore {
                         .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs();
-                    system_prompt.push_str("\n\n## Active Scheduled Jobs\nThese are recurring tasks you manage. You are aware of their existence and status. If the user asks about them, use this information.\n");
+                    system_prompt.push_str("\n\n## Your Scheduled Jobs\n\nYou have set up these recurring tasks. You remember creating them and you are aware of their recent status.\n");
                     for entry in guard.values() {
                         let status = if entry.last_run_at == 0 {
                             "never ran".to_string()
