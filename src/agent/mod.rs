@@ -148,6 +148,8 @@ pub struct AgentCore {
     override_system_prompt: Arc<RwLock<Option<String>>>,
     /// Shared run log from the cron scheduler (if started)
     schedule_log: Option<crate::scheduler::ScheduleRunLog>,
+    /// SQLite memory store for cross-session context
+    memory_store: Option<Arc<MemoryStore>>,
 }
 
 impl AgentCore {
@@ -238,6 +240,7 @@ impl AgentCore {
             subagent_context,
             override_system_prompt: Arc::new(RwLock::new(None)),
             schedule_log,
+            memory_store,
         })
     }
 
@@ -807,6 +810,31 @@ impl AgentCore {
                 prompt.push_str(&format!("- {}\n", s));
             }
         }
+
+        // Inject cross-session memory context
+        if self.config.memory.context_index_enabled {
+            if let Some(ref ms) = self.memory_store {
+                let user_id = self.current_user_id.read();
+                let ctx = crate::memory::context::ContextIndex::new(ms.clone());
+                match ctx.generate(user_id.as_deref()) {
+                    Ok(cross_ctx) if !cross_ctx.is_empty() => {
+                        tracing::info!(
+                            "[build_system_prompt] Injecting cross-session context ({} chars)",
+                            cross_ctx.len()
+                        );
+                        prompt.push_str("\n\n");
+                        prompt.push_str(&cross_ctx);
+                    }
+                    Ok(_) => {
+                        tracing::debug!("[build_system_prompt] No cross-session context to inject");
+                    }
+                    Err(e) => {
+                        tracing::warn!("[build_system_prompt] Failed to generate cross-session context: {}", e);
+                    }
+                }
+            }
+        }
+
         prompt
     }
 
