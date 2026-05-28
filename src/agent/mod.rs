@@ -17,6 +17,7 @@ use crate::memory::{
     CodeModeStore,
     CompactionResult, Compactor, HistoryMessage, MemoryEngine, Reflection, Reflector,
     ReflectorConfig, SessionHistory, SessionStore,
+    store::MemoryStore,
 };
 use crate::orchestrator::ToolOrchestrator;
 use crate::persona::{shared::load_current_persona, PersonaConfig};
@@ -163,6 +164,7 @@ impl AgentCore {
         checkpoint_manager: Arc<CheckpointManager>,
         subagent_context: Arc<parking_lot::RwLock<(Option<String>, Option<String>)>>,
         schedule_log: Option<crate::scheduler::ScheduleRunLog>,
+        memory_store: Option<Arc<MemoryStore>>,
     ) -> Result<Self> {
         let persona = load_current_persona().unwrap_or_else(|err| {
             tracing::warn!(
@@ -176,7 +178,14 @@ impl AgentCore {
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("~/.auxloclaw"));
 
-        let compactor = Arc::new(Compactor::new(config.memory.clone(), data_dir.clone()));
+        let compactor = {
+            let c = Compactor::new(config.memory.clone(), data_dir.clone());
+            if let Some(ref ms) = memory_store {
+                Arc::new(c.with_store(ms.clone()))
+            } else {
+                Arc::new(c)
+            }
+        };
 
         let reflector_config = ReflectorConfig {
             enabled: config.memory.reflection_enabled,
@@ -185,7 +194,14 @@ impl AgentCore {
             max_messages: config.agent.recent_history_turns * 2,
             max_prompt_chars: (config.agent.context_window_tokens as usize).min(20_000),
         };
-        let reflector = Arc::new(Reflector::new(reflector_config, data_dir.clone()));
+        let reflector = {
+            let r = Reflector::new(reflector_config, data_dir.clone());
+            if let Some(ref ms) = memory_store {
+                Arc::new(r.with_store(ms.clone()))
+            } else {
+                Arc::new(r)
+            }
+        };
 
         let extractor_config = ExtractorConfig {
             enabled: config.memory.extraction_enabled,
@@ -233,6 +249,46 @@ impl AgentCore {
         }
         tracing::info!(" Loaded {} sessions from disk", sessions.len());
         Ok(())
+    }
+
+    /// Migrate existing JSON session files to SQLite store.
+    /// Non-fatal: errors on individual files are logged and skipped.
+    pub fn migrate_json_sessions_to_sqlite(
+        &self,
+        store: &MemoryStore,
+        json_dir: &std::path::Path,
+    ) -> Result<usize> {
+        use std::fs;
+        let mut migrated = 0;
+        if !json_dir.exists() {
+            return Ok(0);
+        }
+        for entry in fs::read_dir(json_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().map(|e| e == "json").unwrap_or(false) {
+                match fs::read_to_string(&path) {
+                    Ok(json) => {
+                        match serde_json::from_str::<SessionHistory>(&json) {
+                            Ok(session) => {
+                                if let Err(e) = store.import_session(&session) {
+                                    tracing::warn!("Failed to migrate session {:?}: {}", path, e);
+                                } else {
+                                    migrated += 1;
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to parse session {:?}: {}", path, e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to read {:?}: {}", path, e);
+                    }
+                }
+            }
+        }
+        Ok(migrated)
     }
 
     /// Enable override mode to skip loading persona from disk.

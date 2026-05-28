@@ -1,4 +1,4 @@
-//! Memory Engine - with JSON file persistence for sessions
+//! Memory Engine - with SQLite-backed persistence for sessions, reflections, and more
 
 use anyhow::{Context, Result};
 use lru::LruCache;
@@ -15,9 +15,11 @@ use crate::config::MemoryConfig;
 pub mod compactor;
 pub mod model_store;
 pub mod reflector;
+pub mod store;
 
 pub use compactor::{Compactor, CompactionResult, CompactionSummary};
 pub use reflector::{Reflector, Reflection, ReflectionType, ReflectorConfig};
+pub use store::{MemoryStore, SessionRecord, FactRecord, UserPreference, Observation, CompactionSummaryRecord};
 
 /// Memory entry
 #[derive(Debug, Clone, Serialize, Deserialize)]

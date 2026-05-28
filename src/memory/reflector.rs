@@ -6,9 +6,11 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
 
 use super::{HistoryMessage, SessionHistory};
 use crate::config::MemoryConfig;
+use super::store::MemoryStore;
 
 /// Reflection type classification
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -91,6 +93,7 @@ pub struct Reflector {
     config: ReflectorConfig,
     reflections_dir: PathBuf,
     last_reflection: std::sync::RwLock<HashMap<String, u64>>,
+    store: Option<Arc<MemoryStore>>,
 }
 
 use std::collections::HashMap;
@@ -104,7 +107,14 @@ impl Reflector {
             config,
             reflections_dir,
             last_reflection: std::sync::RwLock::new(HashMap::new()),
+            store: None,
         }
+    }
+
+    /// Attach a SQLite store for dual-writing reflections
+    pub fn with_store(mut self, store: Arc<MemoryStore>) -> Self {
+        self.store = Some(store);
+        self
     }
 
     /// Check if reflection should run for a session
@@ -409,8 +419,9 @@ Conversation:
             .unwrap_or_default()
     }
 
-    /// Save reflection to disk
+    /// Save reflection to disk (JSON backup + SQLite)
     fn save_reflection(&self, reflection: &Reflection) -> Result<()> {
+        // JSON backup
         let filename = format!(
             "{}_{}.json",
             reflection.session_id.replace(['/', '\\', ':'], "_"),
@@ -420,6 +431,14 @@ Conversation:
         let json = serde_json::to_string_pretty(reflection)?;
         fs::write(&path, json)
             .with_context(|| format!("Failed to write reflection file: {:?}", path))?;
+
+        // SQLite insert
+        if let Some(ref store) = self.store {
+            if let Err(e) = store.insert_reflection(reflection) {
+                tracing::warn!("Failed to insert reflection into SQLite: {}", e);
+            }
+        }
+
         Ok(())
     }
 

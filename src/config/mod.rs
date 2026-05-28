@@ -213,6 +213,24 @@ pub struct MemoryConfig {
     pub extraction_cooldown_secs: u64,
     #[serde(default = "default_extraction_pattern_threshold")]
     pub extraction_pattern_threshold: usize,
+    // Facts store
+    #[serde(default = "default_true")]
+    pub facts_enabled: bool,
+    // Preferences tracking
+    #[serde(default = "default_true")]
+    pub preferences_enabled: bool,
+    #[serde(default = "default_preference_confidence")]
+    pub preference_default_confidence: f64,
+    #[serde(default = "default_preference_threshold")]
+    pub preference_confidence_threshold: f64,
+    // Observations
+    #[serde(default = "default_true")]
+    pub observations_enabled: bool,
+    // Context injection
+    #[serde(default = "default_context_index_enabled")]
+    pub context_index_enabled: bool,
+    #[serde(default = "default_max_context_observations")]
+    pub max_context_observations: usize,
 }
 
 fn default_compaction_threshold() -> usize {
@@ -246,6 +264,18 @@ fn default_extraction_cooldown() -> u64 {
 fn default_extraction_pattern_threshold() -> usize {
     2
 }
+fn default_preference_confidence() -> f64 {
+    0.6
+}
+fn default_preference_threshold() -> f64 {
+    0.8
+}
+fn default_context_index_enabled() -> bool {
+    true
+}
+fn default_max_context_observations() -> usize {
+    10
+}
 
 impl Default for MemoryConfig {
     fn default() -> Self {
@@ -266,6 +296,13 @@ impl Default for MemoryConfig {
             extraction_min_tool_calls: 5,
             extraction_cooldown_secs: 600,
             extraction_pattern_threshold: 2,
+            facts_enabled: true,
+            preferences_enabled: true,
+            preference_default_confidence: 0.6,
+            preference_confidence_threshold: 0.8,
+            observations_enabled: true,
+            context_index_enabled: true,
+            max_context_observations: 10,
         }
     }
 }

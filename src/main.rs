@@ -257,6 +257,19 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     let code_mode = Arc::new(memory::CodeModeStore::new(&session_db)?);
     let checkpoint_manager = Arc::new(CheckpointManager::new(&session_db)?);
 
+    // Initialize SQLite memory store
+    let db_path = std::path::Path::new(&session_db);
+    let memory_store = match memory::MemoryStore::new(db_path) {
+        Ok(store) => {
+            info!("SQLite memory store initialized at {}", session_db);
+            Some(Arc::new(store))
+        }
+        Err(e) => {
+            tracing::warn!("Failed to init SQLite memory store, falling back to JSON: {}", e);
+            None
+        }
+    };
+
     plugins.run_lifecycle(plugins::HookEvent::Startup).await;
 
     let agent = Arc::new(agent::AgentCore::new(
@@ -271,7 +284,27 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
         checkpoint_manager.clone(),
         subagent_context.clone(),
         Some(schedule_log.clone()),
+        memory_store.clone(),
     )?);
+
+    // Run JSON-to-SQLite migration if store is available
+    if let Some(ref ms) = memory_store {
+        let sessions_dir = std::path::Path::new(&session_db).parent()
+            .map(|p| p.join("sessions"))
+            .unwrap_or_else(|| std::path::PathBuf::from("~/.auxloclaw/sessions"));
+        if sessions_dir.exists() {
+            match agent.migrate_json_sessions_to_sqlite(ms, &sessions_dir) {
+                Ok(count) => {
+                    if count > 0 {
+                        info!("Migrated {} sessions from JSON to SQLite", count);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("JSON session migration failed (non-fatal): {}", e);
+                }
+            }
+        }
+    }
 
     // Load persisted sessions
     agent.load_sessions().await?;

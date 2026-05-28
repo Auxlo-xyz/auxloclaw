@@ -10,6 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::MemoryConfig;
 use super::{SessionHistory, HistoryMessage};
+use super::store::MemoryStore;
+use std::sync::Arc;
 
 /// Result of a compaction operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,6 +81,7 @@ pub struct Compactor {
     config: MemoryConfig,
     cooldown: CompactionCooldown,
     summaries_dir: PathBuf,
+    store: Option<Arc<MemoryStore>>,
 }
 
 impl Compactor {
@@ -90,7 +93,14 @@ impl Compactor {
             cooldown: CompactionCooldown::new(config.compaction_cooldown_secs),
             summaries_dir,
             config,
+            store: None,
         }
+    }
+
+    /// Attach a SQLite store for dual-writing compaction summaries
+    pub fn with_store(mut self, store: Arc<MemoryStore>) -> Self {
+        self.store = Some(store);
+        self
     }
 
     /// Check if compaction should run for a session
@@ -203,7 +213,20 @@ impl Compactor {
                     created_at: now,
                 };
                 let _ = self.save_summary(&summary_record);
-                
+
+                // SQLite insert
+                if let Some(ref store) = self.store {
+                    if let Err(e) = store.insert_compaction_summary(
+                        &session.session_id,
+                        &summary,
+                        original_count,
+                        session.messages.len(),
+                        tokens_saved,
+                    ) {
+                        tracing::warn!("Failed to insert compaction summary into SQLite: {}", e);
+                    }
+                }
+
                 Ok(CompactionResult {
                     success: true,
                     original_messages: original_count,
