@@ -839,20 +839,144 @@ impl AgentCore {
     }
 
     pub async fn memory_summary(&self) -> String {
-        let sessions = self.sessions.read().await;
-        if sessions.is_empty() {
-            return "No conversation history stored yet.".into();
-        }
+        self.handle_memory_text("/memory").await
+    }
 
-        let mut summary = String::new();
-        for (key, session) in sessions.iter() {
-            summary.push_str(&format!(
-                "Session: {} ({} messages)\n",
-                key,
-                session.messages.len()
-            ));
+    pub async fn handle_memory_text(&self, text: &str) -> String {
+        let parts: Vec<&str> = text.trim().splitn(3, ' ').collect();
+        let sub = parts.get(1).copied().unwrap_or("");
+
+        let ms = match &self.memory_store {
+            Some(ms) => ms,
+            None => return "Memory store not available.".into(),
+        };
+
+        match sub {
+            "facts" => {
+                let facts = match ms.list_facts() {
+                    Ok(f) => f,
+                    Err(e) => return format!("Error: {}", e),
+                };
+                if facts.is_empty() {
+                    return "No facts stored.".into();
+                }
+                let mut out = format!("{} facts:\n", facts.len());
+                for f in &facts {
+                    out.push_str(&format!(
+                        "- {}: {} ({})\n",
+                        f.key,
+                        f.value,
+                        f.source.as_deref().unwrap_or("unknown")
+                    ));
+                }
+                out
+            }
+            "recall" => {
+                let key = parts.get(2).copied().unwrap_or("");
+                if key.is_empty() {
+                    return "Usage: /memory recall <key>".into();
+                }
+                match ms.get_fact(key) {
+                    Ok(Some(f)) => format!("{}: {}", f.key, f.value),
+                    Ok(None) => format!("No fact found for: {}", key),
+                    Err(e) => format!("Error: {}", e),
+                }
+            }
+            "remember" => {
+                let rest = parts.get(2).copied().unwrap_or("");
+                let (key, value) = match rest.split_once(' ') {
+                    Some((k, v)) => (k, v),
+                    None => return "Usage: /memory remember <key> <value>".into(),
+                };
+                match ms.set_fact(key, value, Some("telegram")) {
+                    Ok(()) => format!("Remembered: {} = {}", key, value),
+                    Err(e) => format!("Error: {}", e),
+                }
+            }
+            "search" => {
+                let query = parts.get(2).copied().unwrap_or("");
+                if query.is_empty() {
+                    return "Usage: /memory search <query>".into();
+                }
+                match ms.search_all(query, 5) {
+                    Ok(r) => {
+                        let total = r.reflections.len()
+                            + r.observations.len()
+                            + r.facts.len()
+                            + r.summaries.len();
+                        if total == 0 {
+                            return format!("No results for: {}", query);
+                        }
+                        let mut out = String::new();
+                        for f in &r.facts {
+                            out.push_str(&format!("[fact] {}: {}\n", f.key, f.value));
+                        }
+                        for o in &r.observations {
+                            out.push_str(&format!("[obs] {}: {}\n", o.title, o.narrative));
+                        }
+                        for refl in &r.reflections {
+                            out.push_str(&format!("[reflect] {}\n", refl.narrative));
+                        }
+                        out.push_str(&format!("\n{} results", total));
+                        out
+                    }
+                    Err(e) => format!("Error: {}", e),
+                }
+            }
+            "stats" => {
+                let sessions = ms.session_count().unwrap_or(0);
+                let reflections = ms.reflection_count().unwrap_or(0);
+                let facts = ms.fact_count().unwrap_or(0);
+                let observations = ms.observation_count().unwrap_or(0);
+                format!(
+                    "Memory stats\nSessions: {}\nReflections: {}\nFacts: {}\nObservations: {}",
+                    sessions, reflections, facts, observations
+                )
+            }
+            "preferences" => {
+                let prefs = match ms.get_preferences(None) {
+                    Ok(p) => p,
+                    Err(e) => return format!("Error: {}", e),
+                };
+                if prefs.is_empty() {
+                    return "No preferences tracked.".into();
+                }
+                let mut out = String::new();
+                for p in &prefs {
+                    out.push_str(&format!(
+                        "- {}: {} ({:.0}%)\n",
+                        p.category, p.preference, p.confidence * 100.0
+                    ));
+                }
+                out
+            }
+            "" | "sessions" => {
+                let sessions = self.sessions.read().await;
+                if sessions.is_empty() {
+                    return "No conversation history stored yet.".into();
+                }
+                let mut summary = String::new();
+                for (key, session) in sessions.iter() {
+                    summary.push_str(&format!(
+                        "Session: {} ({} messages)\n",
+                        key,
+                        session.messages.len()
+                    ));
+                }
+                summary
+            }
+            _ => {
+                "Memory commands:\n\
+                 /memory - session list\n\
+                 /memory facts - list all facts\n\
+                 /memory recall <key> - get a fact\n\
+                 /memory remember <key> <value> - store a fact\n\
+                 /memory search <query> - search memory\n\
+                 /memory stats - memory statistics\n\
+                 /memory preferences - user preferences"
+                    .into()
+            }
         }
-        summary
     }
 
     /// Clear a session from memory and disk

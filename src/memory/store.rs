@@ -394,6 +394,36 @@ impl MemoryStore {
         Ok(count as usize)
     }
 
+    pub fn reflection_count(&self) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM reflections",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    pub fn fact_count(&self) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM facts",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    pub fn observation_count(&self) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM observations",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
     // ── Messages ─────────────────────────────────────────────────────────
 
     pub fn insert_message(&self, session_id: &str, msg: &HistoryMessage) -> Result<i64> {

@@ -333,7 +333,10 @@ async fn handle_command(
     let _typing_guard = spawn_typing_loop(&bot, chat_id);
 
     let response = match cmd {
-        Command::Memory => state.agent.memory_summary().await,
+        Command::Memory => {
+            let text = msg.text().unwrap_or("/memory");
+            state.agent.handle_memory_text(text).await
+        }
         Command::Clear => {
             let session_id = format!("tg:{}", chat_id);
             state.agent.clear_session(&session_id).await;

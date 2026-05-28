@@ -1,5 +1,7 @@
 //! AUXLOCLAW CLI - User-friendly command interface
 
+pub mod memory;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -157,6 +159,11 @@ pub enum Commands {
     Update,
     /// Stop the gateway server
     Stop,
+    /// Inspect and manage agent memory
+    Memory {
+        #[command(subcommand)]
+        action: memory::MemorySubcommand,
+    },
 }
 
 #[derive(Subcommand)]

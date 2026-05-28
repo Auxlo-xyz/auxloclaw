@@ -147,6 +147,10 @@ async fn main() -> anyhow::Result<()> {
             commands::stop::handle_stop()?;
         }
 
+        Commands::Memory { action } => {
+            cli::memory::handle_memory_command(&action)?;
+        }
+
         Commands::Model { model_id, base, key, reset, show } => {
             let session_db = dirs::home_dir()
                 .map(|h| h.join(".auxloclaw/sessions"))
