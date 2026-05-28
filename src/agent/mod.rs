@@ -950,6 +950,23 @@ impl AgentCore {
                 }
                 out
             }
+            "reflections" => {
+                let reflections = match ms.get_reflections(None, 10) {
+                    Ok(r) => r,
+                    Err(e) => return format!("Error: {}", e),
+                };
+                if reflections.is_empty() {
+                    return "No reflections stored.".into();
+                }
+                let mut out = format!("{} reflections:\n", reflections.len());
+                for r in &reflections {
+                    out.push_str(&format!(
+                        "- [{}] {}\n",
+                        r.reflection_type, r.narrative
+                    ));
+                }
+                out
+            }
             "" | "sessions" => {
                 let sessions = self.sessions.read().await;
                 if sessions.is_empty() {
@@ -972,6 +989,7 @@ impl AgentCore {
                  /memory recall <key> - get a fact\n\
                  /memory remember <key> <value> - store a fact\n\
                  /memory search <query> - search memory\n\
+                 /memory reflections - recent reflections\n\
                  /memory stats - memory statistics\n\
                  /memory preferences - user preferences"
                     .into()

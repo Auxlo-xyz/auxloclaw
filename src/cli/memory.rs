@@ -53,10 +53,18 @@ pub enum MemorySubcommand {
 }
 
 fn open_store() -> Result<MemoryStore> {
-    let db_path = dirs::home_dir()
+    let config_path = dirs::home_dir()
         .ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?
         .join(".auxloclaw")
-        .join("memory.db");
+        .join("config.toml");
+
+    let config = crate::config::AppConfig::load(
+        config_path.to_str().unwrap_or("~/.auxloclaw/config.toml"),
+    )?;
+
+    let db_path = shellexpand::tilde(&config.memory.database_path).into_owned();
+    let db_path = std::path::PathBuf::from(&db_path);
+
     if !db_path.exists() {
         anyhow::bail!("Memory database not found at {}", db_path.display());
     }

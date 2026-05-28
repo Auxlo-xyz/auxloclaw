@@ -114,22 +114,18 @@ async fn run_update() -> Result<String, anyhow::Error> {
 
     let restart_script = format!(
         r#"#!/bin/sh
-# Wait for the response to reach the caller
+# Wait for the HTTP response to reach the caller
 sleep 3
 
-# Step A: stop the running gateway
-pkill -f 'auxloclaw gateway' 2>/dev/null
-# Give the process time to exit cleanly
-sleep 2
-
-# Step B: back up old binary, then replace
+# Step A: back up old binary, replace with new one
+# Safe while running -- the kernel keeps the old binary in memory via the running process.
 if [ -f "{INSTALL_PATH}" ]; then
     cp "{INSTALL_PATH}" "{INSTALL_PATH}.bak"
 fi
 mv "{tmp_path}" "{INSTALL_PATH}"
 chmod +x "{INSTALL_PATH}"
 
-# Step C: verify the new binary works
+# Step B: verify the new binary works
 NEW_VER=$("{INSTALL_PATH}" --version 2>/dev/null || echo "unknown")
 if [ "$NEW_VER" = "unknown" ]; then
     echo "auxloclaw-updater: new binary failed verification, rolling back..." >&2
@@ -141,6 +137,10 @@ if [ "$NEW_VER" = "unknown" ]; then
 fi
 echo "auxloclaw-updater: installed $NEW_VER, starting gateway..." >&2
 rm -f "{INSTALL_PATH}.bak"
+
+# Step C: stop the old gateway, then exec the new one
+pkill -f 'auxloclaw gateway' 2>/dev/null
+sleep 2
 
 # Step D: restart the gateway with logging
 LOG_DIR="$HOME/.auxloclaw/logs"
