@@ -128,6 +128,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS observations_fts USING fts5(
     content='observations',
     content_rowid='id'
 );
+
+CREATE VIRTUAL TABLE IF NOT EXISTS summaries_fts USING fts5(
+    summary,
+    content='compaction_summaries',
+    content_rowid='id'
+);
 ";
 
 // Triggers to keep FTS in sync
@@ -164,6 +170,14 @@ CREATE TRIGGER IF NOT EXISTS observations_au AFTER UPDATE ON observations BEGIN
     VALUES ('delete', old.id, old.title, old.narrative);
     INSERT INTO observations_fts(rowid, title, narrative)
     VALUES (new.id, new.title, new.narrative);
+END;
+
+CREATE TRIGGER IF NOT EXISTS summaries_ai AFTER INSERT ON compaction_summaries BEGIN
+    INSERT INTO summaries_fts(rowid, summary) VALUES (new.id, new.summary);
+END;
+
+CREATE TRIGGER IF NOT EXISTS summaries_ad AFTER DELETE ON compaction_summaries BEGIN
+    INSERT INTO summaries_fts(summaries_fts, rowid, summary) VALUES ('delete', old.id, old.summary);
 END;
 ";
 
@@ -216,6 +230,14 @@ pub struct Observation {
     pub files: Option<String>,
     pub tool_name: Option<String>,
     pub created_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemorySearchResults {
+    pub reflections: Vec<super::reflector::Reflection>,
+    pub observations: Vec<Observation>,
+    pub facts: Vec<FactRecord>,
+    pub summaries: Vec<CompactionSummaryRecord>,
 }
 
 // ── Store ───────────────────────────────────────────────────────────────────
@@ -532,7 +554,7 @@ impl MemoryStore {
         query: &str,
         limit: usize,
     ) -> Result<Vec<super::reflector::Reflection>> {
-        let fts_query = format!("\"{}\"", query.replace('"', "\"\""));
+        let fts_query = format!("{}*", query.replace('"', "\"\""));
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT r.session_id, r.reflection_type, r.title, r.narrative, r.user_goal,
@@ -734,7 +756,7 @@ impl MemoryStore {
         query: &str,
         limit: usize,
     ) -> Result<Vec<Observation>> {
-        let fts_query = format!("\"{}\"", query.replace('"', "\"\""));
+        let fts_query = format!("{}*", query.replace('"', "\"\""));
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT o.id, o.session_id, o.obs_type, o.title, o.narrative,
@@ -753,6 +775,87 @@ impl MemoryStore {
             result.push(r?);
         }
         Ok(result)
+    }
+
+    pub fn search_facts(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<FactRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT f.key, f.value, f.source, f.confidence, f.created_at, f.updated_at
+             FROM facts f
+             WHERE f.key LIKE ?1
+             ORDER BY f.updated_at DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![format!("{}%", query), limit as i64], |row| {
+            Ok(FactRecord {
+                key: row.get(0)?,
+                value: row.get(1)?,
+                source: row.get(2)?,
+                confidence: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+            })
+        })?;
+        let mut result = Vec::new();
+        for r in rows {
+            result.push(r?);
+        }
+        Ok(result)
+    }
+
+    pub fn search_summaries(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<CompactionSummaryRecord>> {
+        let fts_query = format!("{}*", query.replace('"', "\"\""));
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT cs.session_id, cs.summary, cs.original_messages,
+                    cs.compacted_messages, cs.tokens_saved, cs.created_at
+             FROM compaction_summaries cs
+             INNER JOIN summaries_fts fts ON cs.id = fts.rowid
+             WHERE summaries_fts MATCH ?1
+             ORDER BY rank
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![fts_query, limit as i64], |row| {
+            Ok(CompactionSummaryRecord {
+                session_id: row.get(0)?,
+                summary: row.get(1)?,
+                original_messages: row.get(2)?,
+                compacted_messages: row.get(3)?,
+                tokens_saved: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+        let mut result = Vec::new();
+        for r in rows {
+            result.push(r?);
+        }
+        Ok(result)
+    }
+
+    /// Unified full-text search across all memory types
+    pub fn search_all(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<MemorySearchResults> {
+        let reflections = self.search_reflections(query, limit)?;
+        let observations = self.search_observations(query, limit)?;
+        let facts = self.search_facts(query, limit)?;
+        let summaries = self.search_summaries(query, limit)?;
+        Ok(MemorySearchResults {
+            reflections,
+            observations,
+            facts,
+            summaries,
+        })
     }
 
     pub fn get_observations_by_type(
@@ -1200,5 +1303,74 @@ mod tests {
 
         let messages = store.get_messages("test-session", None).unwrap();
         assert_eq!(messages.len(), 2);
+    }
+
+    #[test]
+    fn test_search_facts_like() {
+        let store = test_store();
+        store.set_fact("rust_version", "1.75.0", Some("config")).unwrap();
+        store.set_fact("python_version", "3.12", Some("config")).unwrap();
+
+        let results = store.search_facts("rust", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].key, "rust_version");
+    }
+
+    #[test]
+    fn test_search_summaries_fts() {
+        let store = test_store();
+        store.create_session("s1", "cli", None).unwrap();
+        store.insert_compaction_summary("s1", "Discussed authentication flow with JWT tokens", 50, 10, 5000).unwrap();
+        store.insert_compaction_summary("s1", "Set up database migrations", 30, 5, 2000).unwrap();
+
+        let results = store.search_summaries("authentication", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].summary.contains("authentication"));
+    }
+
+    #[test]
+    fn test_search_all_unified() {
+        let store = test_store();
+        store.create_session("s1", "cli", None).unwrap();
+
+        use super::super::reflector::{Reflection, ReflectionType};
+        let reflection = Reflection {
+            reflection_type: ReflectionType::Feature,
+            title: "Implemented cache layer".into(),
+            narrative: "Added Redis caching for API responses".into(),
+            user_goal: "Improve performance".into(),
+            completed: "true".into(),
+            next_steps: vec![],
+            user_preferences: None,
+            approach_that_worked: Some("Redis TTL caching".into()),
+            approach_that_failed: None,
+            behavioral_note: None,
+            evidence: None,
+            session_id: "s1".into(),
+            message_count: 15,
+            created_at: 1000,
+        };
+        store.insert_reflection(&reflection).unwrap();
+
+        let obs = Observation {
+            id: None,
+            session_id: "s1".into(),
+            obs_type: "feature".into(),
+            title: "Cache invalidation pattern".into(),
+            narrative: "Implemented write-through cache invalidation".into(),
+            facts: None,
+            concepts: None,
+            files: None,
+            tool_name: None,
+            created_at: 1001,
+        };
+        store.insert_observation(&obs).unwrap();
+
+        store.set_fact("cache_backend", "redis", Some("config")).unwrap();
+
+        let results = store.search_all("cache", 10).unwrap();
+        assert_eq!(results.reflections.len(), 1);
+        assert_eq!(results.observations.len(), 1);
+        assert_eq!(results.facts.len(), 1);
     }
 }
