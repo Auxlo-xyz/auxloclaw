@@ -7,6 +7,7 @@ use tokio::sync::RwLock;
 
 use teloxide::{
     dispatching::Dispatcher,
+    net::Download,
     prelude::*,
     types::{ChatAction, ChatId, Update},
     utils::command::BotCommands,
@@ -256,6 +257,8 @@ pub async fn start(
         teloxide::types::BotCommand { command: "model".into(), description: "Override model/provider settings".into() },
         teloxide::types::BotCommand { command: "mcp".into(), description: "Manage MCP server integrations".into() },
         teloxide::types::BotCommand { command: "token".into(), description: "Manage API tokens".into() },
+        teloxide::types::BotCommand { command: "logs".into(), description: "View gateway logs".into() },
+        teloxide::types::BotCommand { command: "schedule".into(), description: "Manage scheduled jobs".into() },
     ];
     let _ = bot.set_my_commands(commands).await;
 
@@ -712,22 +715,22 @@ async fn handle_model_flow(
 
 async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> ResponseResult<()> {
     let chat_id: i64 = msg.chat.id.0;
-    let text = msg.text().unwrap_or("");
-    if text.is_empty() {
-        return Ok(());
-    }
 
     // Track active chat for mid-task message delivery
     if let Some(ref adapter) = state.message_adapter {
         adapter.set_active_chat(chat_id);
     }
 
-    // Intercept model setup flow BEFORE any other check so endpoint/key
-    // messages aren't eaten by the secret scanner or treated as AI chat.
+    // Intercept model setup flow BEFORE any other check
+    let text = msg.text().unwrap_or("");
     {
         let mut flows = state.pending_model_flows.write().await;
         if let Some(flow) = flows.remove(&chat_id) {
             drop(flows);
+            if text.is_empty() {
+                send_markdown_message(&bot, chat_id, "Please send a text message for the model setup flow.").await?;
+                return Ok(());
+            }
             match handle_model_flow(&bot, &state, chat_id, msg.id, text, flow).await {
                 Ok(()) => return Ok(()),
                 Err(e) => {
@@ -740,7 +743,7 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
     }
 
     // Auto-delete messages containing secrets
-    if crate::commands::token::contains_secret(text) {
+    if !text.is_empty() && crate::commands::token::contains_secret(text) {
         let _ = bot.delete_message(teloxide::types::ChatId(chat_id), msg.id).await;
         send_markdown_message(&bot, chat_id, "Your message was deleted for security (it contained a token/secret). Use `/token set <server> <KEY> <value>` to store tokens safely.").await?;
         return Ok(());
@@ -752,7 +755,6 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
         return Ok(());
     }
 
-    // Check for /normal command to exit code mode
     if text.trim() == "/normal" {
         state.exit_code_mode(chat_id).await;
         state.agent.clear_system_prompt_override(&format!("tg:{}", chat_id)).await;
@@ -760,9 +762,130 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
         return Ok(());
     }
 
+    // ── Media handling: detect and download attachments ──
+    let mut agent_message = String::new();
+    let mut media_downloaded: Vec<String> = Vec::new();
+
+    // Check for photo (largest size)
+    if let Some(photo) = msg.photo() {
+        let largest = photo.iter().max_by_key(|p| p.width * p.height).unwrap();
+        match download_telegram_file(&bot, &largest.file.id, "images", &format!("{}.jpg", largest.file.id)).await {
+            Ok(path) => {
+                let caption = msg.caption().unwrap_or("").to_string();
+                agent_message = if caption.is_empty() {
+                    format!("User sent an image. File saved at: {}\n\nAnalyze this image to understand what the user sent. Use the analyze_image tool with this path.", path)
+                } else {
+                    format!("User sent an image with caption: \"{}\"\n\nFile saved at: {}\n\nAnalyze this image to understand what the user sent. Use the analyze_image tool with this path.", caption, path)
+                };
+                media_downloaded.push(path);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to download photo: {e:?}");
+                agent_message = "User sent an image but it could not be downloaded.".to_string();
+            }
+        }
+    }
+    // Check for video
+    else if let Some(video) = msg.video() {
+        match download_telegram_file(&bot, &video.file.id, "videos", &video.file.unique_id).await {
+            Ok(path) => {
+                let caption = msg.caption().unwrap_or("").to_string();
+                agent_message = if caption.is_empty() {
+                    format!("User sent a video. File saved at: {}\n\nAnalyze this video to understand what the user sent. Use the analyze_video tool with this path.", path)
+                } else {
+                    format!("User sent a video with caption: \"{}\"\n\nFile saved at: {}\n\nAnalyze this video to understand what the user sent. Use the analyze_video tool with this path.", caption, path)
+                };
+                media_downloaded.push(path);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to download video: {e:?}");
+                agent_message = "User sent a video but it could not be downloaded.".to_string();
+            }
+        }
+    }
+    // Check for animation (GIF/video note)
+    else if let Some(animation) = msg.animation() {
+        match download_telegram_file(&bot, &animation.file.id, "videos", &animation.file.unique_id).await {
+            Ok(path) => {
+                let caption = msg.caption().unwrap_or("").to_string();
+                agent_message = if caption.is_empty() {
+                    format!("User sent an animated GIF/video. File saved at: {}\n\nAnalyze this animation. Use analyze_video with this path.", path)
+                } else {
+                    format!("User sent an animated GIF/video with caption: \"{}\"\n\nFile saved at: {}", caption, path)
+                };
+                media_downloaded.push(path);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to download animation: {e:?}");
+                agent_message = "User sent an animation but it could not be downloaded.".to_string();
+            }
+        }
+    }
+    // Check for document
+    else if let Some(doc) = msg.document() {
+        let filename = doc.file_name.as_deref().unwrap_or("unknown");
+        let subdir = if filename.ends_with(".pdf") { "documents" } else { "files" };
+        match download_telegram_file(&bot, &doc.file.id, subdir, filename).await {
+            Ok(path) => {
+                let caption = msg.caption().unwrap_or("").to_string();
+                agent_message = if caption.is_empty() {
+                    format!("User sent a file: {}\n\nFile saved at: {}\n\nUse the appropriate tool to analyze this file (read_document for PDFs, read_file for text, analyze_image for images).", filename, path)
+                } else {
+                    format!("User sent a file: {} with caption: \"{}\"\n\nFile saved at: {}\n\nUse the appropriate tool to analyze this file.", filename, caption, path)
+                };
+                media_downloaded.push(path);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to download document: {e:?}");
+                agent_message = format!("User sent a file ({}) but it could not be downloaded.", filename);
+            }
+        }
+    }
+    // Check for audio
+    else if let Some(audio) = msg.audio() {
+        let filename = audio.file_name.as_deref().unwrap_or("audio.mp3");
+        match download_telegram_file(&bot, &audio.file.id, "audio", filename).await {
+            Ok(path) => {
+                let caption = msg.caption().unwrap_or("").to_string();
+                agent_message = if caption.is_empty() {
+                    format!("User sent an audio file. File saved at: {}\n\nRead/analyze this audio file as needed.", path)
+                } else {
+                    format!("User sent an audio file with caption: \"{}\"\n\nFile saved at: {}", caption, path)
+                };
+                media_downloaded.push(path);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to download audio: {e:?}");
+                agent_message = "User sent audio but it could not be downloaded.".to_string();
+            }
+        }
+    }
+    // Check for voice message
+    else if let Some(voice) = msg.voice() {
+        match download_telegram_file(&bot, &voice.file.id, "audio", &format!("voice_{}.ogg", msg.id.0)).await {
+            Ok(path) => {
+                agent_message = format!("User sent a voice message. File saved at: {}\n\nIf needed, transcribe or analyze this voice message.", path);
+                media_downloaded.push(path);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to download voice: {e:?}");
+                agent_message = "User sent a voice message but it could not be downloaded.".to_string();
+            }
+        }
+    }
+
+    // If no media was attached, use text content
+    if agent_message.is_empty() {
+        agent_message = text.to_string();
+    }
+
+    // If still empty (empty text, no media), bail
+    if agent_message.is_empty() {
+        return Ok(());
+    }
+
     let _typing_guard = spawn_typing_loop(&bot, chat_id);
-    let session = state.get_or_create_session(chat_id).await;
-    // Route through code session if in code mode
+    let _session = state.get_or_create_session(chat_id).await;
     let session_id = if state.is_coding(chat_id).await {
         format!("tg-code-{}", chat_id)
     } else {
@@ -771,19 +894,40 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
     state.agent.set_session_context("telegram", &format!("{}", chat_id)).await;
     let response = state
         .agent
-        .process(text, Some(&session_id))
+        .process(&agent_message, Some(&session_id))
         .await;
     state.update_session(chat_id, None).await;
 
-    if session.voice_mode {
-        let voice_response = format!("Voice mode response\n\n{}", response);
-        send_markdown_message(&bot, chat_id, &voice_response).await?;
-    } else {
-        if let Err(err) = send_markdown_message(&bot, chat_id, &response).await {
-            tracing::warn!("Telegram send error: {err:?}");
-        }
+    if let Err(err) = send_markdown_message(&bot, chat_id, &response).await {
+        tracing::warn!("Telegram send error: {err:?}");
     }
     Ok(())
+}
+
+/// Download a file from Telegram and save it to the auxloclaw media directory.
+/// Returns the absolute path to the saved file.
+async fn download_telegram_file(
+    bot: &Bot,
+    file_id: &str,
+    subdir: &str,
+    filename: &str,
+) -> anyhow::Result<String> {
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/root"));
+    let media_dir = home.join(".auxloclaw/media").join(subdir);
+    tokio::fs::create_dir_all(&media_dir).await?;
+
+    let safe_name = filename
+        .replace("..", "_")
+        .replace("/", "_")
+        .replace("\\", "_");
+    let path = media_dir.join(&safe_name);
+
+    let file = bot.get_file(file_id).await?;
+    let mut writer = tokio::fs::File::create(&path).await?;
+    bot.download_file(&file.path, &mut writer).await?;
+
+    tracing::info!("Downloaded Telegram file to: {}", path.display());
+    Ok(path.to_string_lossy().to_string())
 }
 
 async fn send_markdown_message(bot: &Bot, chat_id: i64, text: &str) -> ResponseResult<()> {

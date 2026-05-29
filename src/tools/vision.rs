@@ -187,6 +187,161 @@ impl Tool for AnalyzeImageTool {
     }
 }
 
+// ─── Tool: analyze_video ────────────────────────────────────────────────────
+
+pub struct AnalyzeVideoTool;
+
+#[async_trait::async_trait]
+impl Tool for AnalyzeVideoTool {
+    fn name(&self) -> &str { "analyze_video" }
+    fn description(&self) -> &str {
+        "Analyze a video file by extracting key frames and sending them to the vision model. \
+         Supports MP4, MOV, AVI, MKV, WebM. Extracts evenly-spaced frames using ffmpeg, \
+         then sends them as a multi-image prompt to the vision model."
+    }
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Absolute path to the video file"
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "What to ask about the video",
+                    "default": "Describe what happens in this video in detail"
+                },
+                "max_frames": {
+                    "type": "integer",
+                    "description": "Maximum number of frames to extract (1-16)",
+                    "default": 8
+                }
+            },
+            "required": ["path"]
+        })
+    }
+
+    async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+        let path_str = args["path"].as_str().unwrap_or("");
+        let prompt = args["prompt"].as_str().unwrap_or("Describe what happens in this video in detail");
+        let max_frames = args["max_frames"].as_u64().unwrap_or(8).min(16).max(1) as u32;
+
+        let path = Path::new(path_str);
+        if !path.exists() {
+            return Ok(ToolResult {
+                tool_name: "analyze_video".into(),
+                success: false,
+                output: json!(null),
+                error: Some(format!("File not found: {}", path_str)),
+                duration_ms: 0,
+            });
+        }
+
+        // Get video duration first
+        let duration = get_video_duration(path)?;
+        if duration <= 0.0 {
+            return Ok(ToolResult {
+                tool_name: "analyze_video".into(),
+                success: false,
+                output: json!(null),
+                error: Some("Could not determine video duration".to_string()),
+                duration_ms: 0,
+            });
+        }
+
+        // Calculate frame timestamps (evenly spaced, skip first/last 0.5s)
+        let start = 0.5_f64;
+        let end = (duration - 0.5).max(start + 0.1);
+        let interval = (end - start) / (max_frames as f64 - 1.0).max(1.0);
+
+        let mut frames = Vec::new();
+        let tmp_dir = std::env::temp_dir().join(format!("auxlo_video_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp_dir)?;
+
+        for i in 0..max_frames {
+            let timestamp = start + (i as f64) * interval;
+            let out_path = tmp_dir.join(format!("frame_{:04}.jpg", i));
+
+            let status = std::process::Command::new("ffmpeg")
+                .args(["-ss", &format!("{:.2}", timestamp)])
+                .args(["-i", path_str])
+                .args(["-frames:v", "1"])
+                .args(["-q:v", "3"])
+                .arg("-y")
+                .arg(&out_path)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+
+            match status {
+                Ok(s) if s.success() => {
+                    if let Ok(data) = std::fs::read(&out_path) {
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+                        frames.push(json!({
+                            "mime": "image/jpeg",
+                            "base64": b64,
+                            "detail": "auto",
+                            "timestamp": format!("{:.1}s", timestamp),
+                        }));
+                    }
+                }
+                _ => {
+                    tracing::warn!("ffmpeg failed to extract frame at {:.2}s", timestamp);
+                }
+            }
+        }
+
+        // Cleanup temp dir
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+
+        if frames.is_empty() {
+            return Ok(ToolResult {
+                tool_name: "analyze_video".into(),
+                success: false,
+                output: json!(null),
+                error: Some("Failed to extract any frames from video. Is ffmpeg installed?".to_string()),
+                duration_ms: 0,
+            });
+        }
+
+        let file_size = std::fs::metadata(path)?.len();
+
+        Ok(ToolResult {
+            tool_name: "analyze_video".into(),
+            success: true,
+            output: json!({
+                "__vision_multi__": true,
+                "prompt": format!("This video is {:.1}s long. {} Here are {} key frames extracted from the video at evenly-spaced timestamps. Analyze them in sequence to describe what happens in the video.", duration, prompt, frames.len()),
+                "frames": frames,
+                "file": path_str,
+                "duration_secs": duration,
+                "size_bytes": file_size,
+            }),
+            error: None,
+            duration_ms: 0,
+        })
+    }
+}
+
+/// Get video duration in seconds using ffprobe.
+fn get_video_duration(path: &Path) -> anyhow::Result<f64> {
+    let output = std::process::Command::new("ffprobe")
+        .args(["-v", "error"])
+        .args(["-show_entries", "format=duration"])
+        .args(["-of", "csv=p=0"])
+        .arg(path)
+        .output()?;
+
+    if !output.status.success() {
+        anyhow::bail!("ffprobe failed: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let duration = stdout.trim().parse::<f64>()?;
+    Ok(duration)
+}
+
 // ─── Tool: read_document ────────────────────────────────────────────────────
 
 pub struct ReadDocumentTool;

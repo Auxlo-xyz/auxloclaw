@@ -70,8 +70,38 @@ fn is_readonly_tool(name: &str) -> bool {
 
 /// If a tool result contains `__vision__` data, build a multimodal message
 /// that injects the image into the conversation for the model to see.
+/// Also handles `__vision_multi__` for video frames (multiple images).
 fn try_build_vision_message(result_str: &str) -> Option<Message> {
     let v: serde_json::Value = serde_json::from_str(result_str).ok()?;
+
+    // Multi-frame vision (video analysis)
+    if v.get("__vision_multi__").and_then(|b| b.as_bool()).unwrap_or(false) {
+        let prompt = v.get("prompt")?.as_str()?;
+        let frames = v.get("frames")?.as_array()?;
+        if frames.is_empty() { return None; }
+
+        let mut parts = vec![ContentPart::Text { text: prompt.to_string() }];
+        for frame in frames {
+            let mime = frame.get("mime")?.as_str()?;
+            let b64 = frame.get("base64")?.as_str()?;
+            let detail = frame.get("detail").and_then(|d| d.as_str()).map(|s| s.to_string());
+            let data_url = format!("data:{};base64,{}", mime, b64);
+            parts.push(ContentPart::ImageUrl {
+                image_url: ImageUrlPayload { url: data_url, detail },
+            });
+        }
+
+        return Some(Message {
+            role: "user".into(),
+            content: None,
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            content_parts: Some(parts),
+        });
+    }
+
+    // Single-frame vision (image analysis)
     if !v.get("__vision__")?.as_bool()? { return None; }
     let prompt = v.get("prompt")?.as_str()?;
     let mime = v.get("mime")?.as_str()?;

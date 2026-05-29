@@ -342,6 +342,11 @@ impl SystemPromptBuilder {
             desc.push_str("- **Fetch tweets** from X/Twitter by ID\n");
             desc.push_str("- **Send messages proactively** to the user via connected platforms mid-task (progress updates, milestones, status reports)\n");
             desc.push_str("- **Delegate subtasks to sub-agents** that run in parallel, enabling concurrent research, coding, or analysis\n\n");
+            desc.push_str("- **Manage scheduled jobs** using create_scheduled_job, update_scheduled_job, delete_scheduled_job, list_scheduled_jobs -- set up recurring autonomous tasks with cron expressions\n");
+            desc.push_str("- **Coordinate multi-agent work** using the blackboard (shared state with TTL/tags) and orchestrate tool (launch parallel sub-agents with shared context)\n");
+            desc.push_str("- **Analyze images** using analyze_image -- send images to the vision model for understanding\n");
+            desc.push_str("- **Analyze videos** using analyze_video -- extract key frames from video and analyze with vision\n");
+            desc.push_str("- **Read documents** using read_document -- extract text from PDFs\n\n");
             desc.push_str("You should proactively use these capabilities. Do NOT say you cannot do something if you have a tool for it.\n");
             desc.push_str("Be confident in your abilities. You are not a passive assistant - you are an autonomous agent.\n");
             desc.push_str("\n**For long-running tasks:** Use send_message to update the user periodically. Do not wait for the full response cycle to report progress.\n");
@@ -463,6 +468,29 @@ impl SystemPromptBuilder {
                 formatted.push_str("  - Use for parallelizing work: split complex tasks into independent pieces\n");
                 formatted.push_str("  - Sub-agents share the same tools and capabilities as the main agent\n");
                 formatted.push_str("  - Cost-aware: delegation is skipped if sub-agents are disabled in config\n");
+            }
+            "analyze_image" => {
+                formatted.push_str("  Usage: {\"tool\": \"analyze_image\", \"arguments\": {\"path\": \"/path/to/image.png\", \"prompt\": \"What is in this image?\"}}\n");
+                formatted.push_str("  - Analyzes an image using the vision model\n");
+                formatted.push_str("  - Supports PNG, JPEG, GIF, WebP, BMP, TIFF\n");
+                formatted.push_str("  - Use when the user sends an image attachment\n");
+            }
+            "analyze_video" => {
+                formatted.push_str("  Usage: {\"tool\": \"analyze_video\", \"arguments\": {\"path\": \"/path/to/video.mp4\", \"prompt\": \"Describe what happens\", \"max_frames\": 8}}\n");
+                formatted.push_str("  - Extracts key frames from video using ffmpeg, then analyzes with vision\n");
+                formatted.push_str("  - Supports MP4, MOV, AVI, MKV, WebM\n");
+                formatted.push_str("  - Use when the user sends a video attachment\n");
+            }
+            "read_document" => {
+                formatted.push_str("  Usage: {\"tool\": \"read_document\", \"arguments\": {\"path\": \"/path/to/document.pdf\"}}\n");
+                formatted.push_str("  - Extracts text from PDF files\n");
+                formatted.push_str("  - For scanned PDFs, use analyze_image on individual pages instead\n");
+            }
+            "create_scheduled_job" => {
+                formatted.push_str("  Usage: {\"tool\": \"create_scheduled_job\", \"arguments\": {\"name\": \"daily-report\", \"cron\": \"0 9 * * *\", \"prompt\": \"Generate daily summary\", \"enabled\": true}}\n");
+                formatted.push_str("  - Creates a recurring scheduled job with a cron expression\n");
+                formatted.push_str("  - The agent runs the given prompt autonomously at the scheduled time\n");
+                formatted.push_str("  - Use for recurring tasks: daily reports, monitoring, cleanup\n");
             }
             _ => {
                 formatted.push_str(&format!(

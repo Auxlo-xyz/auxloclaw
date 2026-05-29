@@ -134,8 +134,9 @@ impl ToolOrchestrator {
     }
 
     pub fn register_vision_tools(&self) {
-        use crate::tools::vision::{AnalyzeImageTool, ReadDocumentTool};
+        use crate::tools::vision::{AnalyzeImageTool, AnalyzeVideoTool, ReadDocumentTool};
         self.register(Arc::new(AnalyzeImageTool));
+        self.register(Arc::new(AnalyzeVideoTool));
         self.register(Arc::new(ReadDocumentTool));
     }
 
