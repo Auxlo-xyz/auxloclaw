@@ -9,6 +9,36 @@ use base64::Engine;
 use serde_json::json;
 use std::path::Path;
 
+const VISION_ENDPOINT: &str = "https://gateway.auxlo.xyz/v1/chat/completions";
+const VISION_MODEL: &str = "gemini-3.1-flash-lite";
+
+fn vision_api_key() -> String {
+    std::env::var("GEMINI_API_KEY").unwrap_or_default()
+}
+
+async fn call_vision_api(messages: serde_json::Value) -> anyhow::Result<String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(VISION_ENDPOINT)
+        .header("Authorization", format!("Bearer {}", vision_api_key()))
+        .header("Content-Type", "application/json")
+        .json(&messages)
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Vision API error {}: {}", status, body);
+    }
+
+    let v: serde_json::Value = resp.json().await?;
+    let content = v["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("No response from vision model");
+    Ok(content.to_string())
+}
+
 /// Supported image MIME types, derived from file extension.
 fn mime_from_ext(path: &Path) -> &'static str {
     match path
@@ -153,7 +183,7 @@ impl Tool for AnalyzeImageTool {
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         let path_str = args["path"].as_str().unwrap_or("");
         let prompt = args["prompt"].as_str().unwrap_or("Describe this image in detail");
-        let detail = args["detail"].as_str();
+        let detail = args["detail"].as_str().unwrap_or("auto");
 
         let path = Path::new(path_str);
         if !path.exists() {
@@ -168,22 +198,41 @@ impl Tool for AnalyzeImageTool {
 
         let (b64, mime) = read_image_base64(path)?;
         let file_size = std::fs::metadata(path)?.len();
+        let data_url = format!("data:{};base64,{}", mime, b64);
 
-        Ok(ToolResult {
-            tool_name: "analyze_image".into(),
-            success: true,
-            output: json!({
-                "__vision__": true,
-                "prompt": prompt,
-                "mime": mime,
-                "base64": b64,
-                "detail": detail,
-                "file": path_str,
-                "size_bytes": file_size,
+        let request = json!({
+            "model": VISION_MODEL,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_url, "detail": detail}}
+                ]
+            }],
+            "max_tokens": 4096
+        });
+
+        let start = std::time::Instant::now();
+        match call_vision_api(request).await {
+            Ok(response) => Ok(ToolResult {
+                tool_name: "analyze_image".into(),
+                success: true,
+                output: json!({
+                    "analysis": response,
+                    "file": path_str,
+                    "size_bytes": file_size,
+                }),
+                error: None,
+                duration_ms: start.elapsed().as_millis() as u64,
             }),
-            error: None,
-            duration_ms: 0,
-        })
+            Err(e) => Ok(ToolResult {
+                tool_name: "analyze_image".into(),
+                success: false,
+                output: json!(null),
+                error: Some(format!("Vision API call failed: {}", e)),
+                duration_ms: start.elapsed().as_millis() as u64,
+            }),
+        }
     }
 }
 
@@ -238,7 +287,6 @@ impl Tool for AnalyzeVideoTool {
             });
         }
 
-        // Get video duration first
         let duration = get_video_duration(path)?;
         if duration <= 0.0 {
             return Ok(ToolResult {
@@ -250,17 +298,24 @@ impl Tool for AnalyzeVideoTool {
             });
         }
 
-        // Calculate frame timestamps (evenly spaced, skip first/last 0.5s)
-        let start = 0.5_f64;
-        let end = (duration - 0.5).max(start + 0.1);
-        let interval = (end - start) / (max_frames as f64 - 1.0).max(1.0);
+        let start_t = 0.5_f64;
+        let end_t = (duration - 0.5).max(start_t + 0.1);
+        let interval = (end_t - start_t) / (max_frames as f64 - 1.0).max(1.0);
 
-        let mut frames = Vec::new();
+        let mut content_parts = vec![serde_json::json!({
+            "type": "text",
+            "text": format!(
+                "This video is {:.1}s long. {} Here are {} key frames extracted at evenly-spaced timestamps. Analyze them in sequence.",
+                duration, prompt, max_frames
+            )
+        })];
+
         let tmp_dir = std::env::temp_dir().join(format!("auxlo_video_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp_dir)?;
 
+        let mut extracted = 0u32;
         for i in 0..max_frames {
-            let timestamp = start + (i as f64) * interval;
+            let timestamp = start_t + (i as f64) * interval;
             let out_path = tmp_dir.join(format!("frame_{:04}.jpg", i));
 
             let status = std::process::Command::new("ffmpeg")
@@ -278,49 +333,62 @@ impl Tool for AnalyzeVideoTool {
                 Ok(s) if s.success() => {
                     if let Ok(data) = std::fs::read(&out_path) {
                         let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-                        frames.push(json!({
-                            "mime": "image/jpeg",
-                            "base64": b64,
-                            "detail": "auto",
-                            "timestamp": format!("{:.1}s", timestamp),
+                        content_parts.push(json!({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": format!("data:image/jpeg;base64,{}", b64),
+                                "detail": "auto"
+                            }
                         }));
+                        extracted += 1;
                     }
                 }
-                _ => {
-                    tracing::warn!("ffmpeg failed to extract frame at {:.2}s", timestamp);
-                }
+                _ => tracing::warn!("ffmpeg failed at {:.2}s", timestamp),
             }
         }
 
-        // Cleanup temp dir
         let _ = std::fs::remove_dir_all(&tmp_dir);
 
-        if frames.is_empty() {
+        if extracted == 0 {
             return Ok(ToolResult {
                 tool_name: "analyze_video".into(),
                 success: false,
                 output: json!(null),
-                error: Some("Failed to extract any frames from video. Is ffmpeg installed?".to_string()),
+                error: Some("Failed to extract any frames. Is ffmpeg installed?".to_string()),
                 duration_ms: 0,
             });
         }
 
-        let file_size = std::fs::metadata(path)?.len();
+        let request = json!({
+            "model": VISION_MODEL,
+            "messages": [{"role": "user", "content": content_parts}],
+            "max_tokens": 4096
+        });
 
-        Ok(ToolResult {
-            tool_name: "analyze_video".into(),
-            success: true,
-            output: json!({
-                "__vision_multi__": true,
-                "prompt": format!("This video is {:.1}s long. {} Here are {} key frames extracted from the video at evenly-spaced timestamps. Analyze them in sequence to describe what happens in the video.", duration, prompt, frames.len()),
-                "frames": frames,
-                "file": path_str,
-                "duration_secs": duration,
-                "size_bytes": file_size,
+        let file_size = std::fs::metadata(path)?.len();
+        let start = std::time::Instant::now();
+        match call_vision_api(request).await {
+            Ok(response) => Ok(ToolResult {
+                tool_name: "analyze_video".into(),
+                success: true,
+                output: json!({
+                    "analysis": response,
+                    "file": path_str,
+                    "duration_secs": duration,
+                    "frames_analyzed": extracted,
+                    "size_bytes": file_size,
+                }),
+                error: None,
+                duration_ms: start.elapsed().as_millis() as u64,
             }),
-            error: None,
-            duration_ms: 0,
-        })
+            Err(e) => Ok(ToolResult {
+                tool_name: "analyze_video".into(),
+                success: false,
+                output: json!(null),
+                error: Some(format!("Vision API call failed: {}", e)),
+                duration_ms: start.elapsed().as_millis() as u64,
+            }),
+        }
     }
 }
 
