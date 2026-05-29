@@ -171,9 +171,20 @@ impl Reflector {
         // Call pollinations.ai for reflection
         let response = self.call_pollinations(&prompt).await?;
 
-        // Parse the JSON response
-        let reflection =
-            self.parse_reflection(&response, &session.session_id, session.messages.len())?;
+        // Parse the JSON response -- retry once if truncated
+        let reflection = match self.parse_reflection(&response, &session.session_id, session.messages.len()) {
+            Ok(r) => r,
+            Err(e) => {
+                // Retry with explicit JSON-only instruction
+                let retry_prompt = format!(
+                    "{}\n\nIMPORTANT: Return ONLY a valid JSON object. No prose, no markdown fences, no explanation. Just the raw JSON object.",
+                    prompt
+                );
+                let retry_response = self.call_pollinations(&retry_prompt).await?;
+                self.parse_reflection(&retry_response, &session.session_id, session.messages.len())
+                    .context(format!("Reflection parse failed after retry. Original error: {}", e))?
+            }
+        };
 
         if let Some(existing) = latest_reflection {
             if self.is_duplicate_reflection(&existing, &reflection) {
@@ -290,7 +301,8 @@ Conversation:
                     "role": "user",
                     "content": prompt
                 }
-            ]
+            ],
+            "max_tokens": 1500
         });
 
         let client = reqwest::Client::new();
@@ -350,11 +362,11 @@ Conversation:
                 .to_string(),
             completed: parsed["completed"].as_str().unwrap_or("").to_string(),
             next_steps: self.parse_next_steps(&parsed["nextSteps"]),
-            user_preferences: parsed["userPreferences"].as_str().map(|s| s.to_string()),
-            approach_that_worked: parsed["approachThatWorked"].as_str().map(|s| s.to_string()),
-            approach_that_failed: parsed["approachThatFailed"].as_str().map(|s| s.to_string()),
-            behavioral_note: parsed["behavioralNote"].as_str().map(|s| s.to_string()),
-            evidence: parsed["evidence"].as_str().map(|s| s.to_string()),
+            user_preferences: Self::stringify_value(&parsed["userPreferences"]),
+            approach_that_worked: Self::stringify_value(&parsed["approachThatWorked"]),
+            approach_that_failed: Self::stringify_value(&parsed["approachThatFailed"]),
+            behavioral_note: Self::stringify_value(&parsed["behavioralNote"]),
+            evidence: Self::stringify_value(&parsed["evidence"]),
             session_id: session_id.to_string(),
             message_count,
             created_at: now,
@@ -363,13 +375,101 @@ Conversation:
         Ok(reflection)
     }
 
+    /// Coerce a JSON value to Option<String> -- handles strings AND arrays
+    fn stringify_value(val: &serde_json::Value) -> Option<String> {
+        match val {
+            serde_json::Value::Null | serde_json::Value::Object(_) => None,
+            serde_json::Value::String(s) if s.is_empty() => None,
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Array(arr) => {
+                let parts: Vec<String> = arr.iter().filter_map(|v| {
+                    match v {
+                        serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
+                        serde_json::Value::Number(n) => Some(n.to_string()),
+                        serde_json::Value::Bool(b) => Some(b.to_string()),
+                        _ => None,
+                    }
+                }).collect();
+                if parts.is_empty() { None } else { Some(parts.join(", ")) }
+            }
+            other => {
+                let s = other.to_string();
+                if s.is_empty() || s == "null" { None } else { Some(s) }
+            }
+        }
+    }
+
+    /// Attempt to repair truncated JSON by closing open structures
+    fn try_repair_json(s: &str) -> Option<String> {
+        let mut result = s.to_string();
+
+        // Close any open string
+        let mut in_string = false;
+        let mut escaped = false;
+        for ch in result.chars() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == '"' {
+                in_string = !in_string;
+            }
+        }
+        if in_string {
+            result.push('"');
+        }
+
+        // Count open braces/brackets and close them
+        let mut brace_depth: i32 = 0;
+        let mut bracket_depth: i32 = 0;
+        let mut in_str = false;
+        let mut esc = false;
+        for ch in result.chars() {
+            if esc { esc = false; continue; }
+            if ch == '\\' && in_str { esc = true; continue; }
+            if ch == '"' { in_str = !in_str; continue; }
+            if in_str { continue; }
+            match ch {
+                '{' => brace_depth += 1,
+                '}' => brace_depth -= 1,
+                '[' => bracket_depth += 1,
+                ']' => bracket_depth -= 1,
+                _ => {}
+            }
+        }
+        // Remove trailing comma if any
+        let trimmed = result.trim_end();
+        if trimmed.ends_with(',') {
+            result = trimmed[..trimmed.len() - 1].to_string();
+        }
+        for _ in 0..bracket_depth { result.push(']'); }
+        for _ in 0..brace_depth { result.push('}'); }
+
+        // Verify it parses
+        if serde_json::from_str::<serde_json::Value>(&result).is_ok() {
+            Some(result)
+        } else {
+            None
+        }
+    }
+
     /// Extract JSON from response (handles markdown code blocks, etc.)
     fn extract_json(&self, response: &str) -> Result<String> {
         let trimmed = response.trim();
 
         // Try direct JSON parse first
         if trimmed.starts_with('{') {
-            // Find the end of the JSON object
+            if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
+                return Ok(trimmed.to_string());
+            }
+            // Truncated -- try to repair
+            if let Some(repaired) = Self::try_repair_json(trimmed) {
+                return Ok(repaired);
+            }
             if let Some(end) = trimmed.rfind('}') {
                 return Ok(trimmed[..=end].to_string());
             }
@@ -381,11 +481,21 @@ Conversation:
             if let Some(end) = rest.find("```") {
                 return Ok(rest[..end].trim().to_string());
             }
+            // Code block not closed -- try repair on the rest
+            if let Some(repaired) = Self::try_repair_json(rest.trim()) {
+                return Ok(repaired);
+            }
         }
 
         // Try to find JSON object anywhere
         if let Some(start) = trimmed.find('{') {
             let rest = &trimmed[start..];
+            if serde_json::from_str::<serde_json::Value>(rest).is_ok() {
+                return Ok(rest.to_string());
+            }
+            if let Some(repaired) = Self::try_repair_json(rest) {
+                return Ok(repaired);
+            }
             if let Some(end) = rest.rfind('}') {
                 return Ok(rest[..=end].to_string());
             }
