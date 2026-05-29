@@ -221,6 +221,7 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     let mut raw_orchestrator = orchestrator::ToolOrchestrator::new();
     // Register coding workspace tools for /code mode
     raw_orchestrator.register_code_tools();
+    raw_orchestrator.register_vision_tools();
     let mut raw_plugins = plugins::PluginManager::new(config.plugins.clone());
     raw_plugins.set_tools(raw_orchestrator.list_tools());
     let plugins = Arc::new(raw_plugins);

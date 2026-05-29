@@ -110,6 +110,12 @@ impl ToolOrchestrator {
         self.register(Arc::new(GrepSearchTool));
     }
 
+    pub fn register_vision_tools(&self) {
+        use crate::tools::vision::{AnalyzeImageTool, ReadDocumentTool};
+        self.register(Arc::new(AnalyzeImageTool));
+        self.register(Arc::new(ReadDocumentTool));
+    }
+
     pub fn register_send_message_tool(&self, router: crate::tools::MessageRouter) {
         use crate::tools::SendMessageTool;
         self.register(Arc::new(SendMessageTool::new(router)));

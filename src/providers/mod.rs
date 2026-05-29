@@ -514,6 +514,24 @@ pub struct Message {
     pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_parts: Option<Vec<ContentPart>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ContentPart {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: ImageUrlPayload },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageUrlPayload {
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 impl Message {
@@ -524,6 +542,7 @@ impl Message {
             tool_calls: None,
             tool_call_id: None,
             name: None,
+            content_parts: None,
         }
     }
 
@@ -534,6 +553,7 @@ impl Message {
             tool_calls: Some(tool_calls),
             tool_call_id: None,
             name: None,
+            content_parts: None,
         }
     }
 
@@ -548,6 +568,49 @@ impl Message {
             tool_calls: None,
             tool_call_id: Some(tool_call_id.into()),
             name: Some(name.into()),
+            content_parts: None,
+        }
+    }
+
+    pub fn with_image(
+        role: impl Into<String>,
+        text: impl Into<String>,
+        base64_data: &str,
+        mime_type: &str,
+    ) -> Self {
+        let data_url = format!("data:{};base64,{}", mime_type, base64_data);
+        Self {
+            role: role.into(),
+            content: None,
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            content_parts: Some(vec![
+                ContentPart::Text { text: text.into() },
+                ContentPart::ImageUrl {
+                    image_url: ImageUrlPayload { url: data_url, detail: None },
+                },
+            ]),
+        }
+    }
+
+    pub fn with_image_url(
+        role: impl Into<String>,
+        text: impl Into<String>,
+        url: impl Into<String>,
+    ) -> Self {
+        Self {
+            role: role.into(),
+            content: None,
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            content_parts: Some(vec![
+                ContentPart::Text { text: text.into() },
+                ContentPart::ImageUrl {
+                    image_url: ImageUrlPayload { url: url.into(), detail: None },
+                },
+            ]),
         }
     }
 }

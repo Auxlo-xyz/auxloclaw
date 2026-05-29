@@ -63,11 +63,36 @@ impl ProviderAdapter for AnthropicAdapter {
                     }
                 }
                 "user" => {
-                    let content = msg.content.as_deref().unwrap_or("");
-                    messages.push(serde_json::json!({
-                        "role": "user",
-                        "content": content,
-                    }));
+                    if let Some(ref parts) = msg.content_parts {
+                        // Multimodal: transform to Anthropic content blocks
+                        let mut blocks: Vec<Value> = Vec::new();
+                        for part in parts {
+                            match part {
+                                crate::providers::ContentPart::Text { text } => {
+                                    blocks.push(serde_json::json!({"type": "text", "text": text}));
+                                }
+                                crate::providers::ContentPart::ImageUrl { image_url } => {
+                                    let url = &image_url.url;
+                                    // Parse data URL: "data:image/png;base64,<data>"
+                                    if let Some(rest) = url.strip_prefix("data:") {
+                                        let (media_type, data) = rest.split_once(";base64,").unwrap_or(("application/octet-stream", url.as_str()));
+                                        blocks.push(serde_json::json!({
+                                            "type": "image",
+                                            "source": {
+                                                "type": "base64",
+                                                "media_type": media_type,
+                                                "data": data,
+                                            }
+                                        }));
+                                    }
+                                }
+                            }
+                        }
+                        messages.push(serde_json::json!({"role": "user", "content": blocks}));
+                    } else {
+                        let content = msg.content.as_deref().unwrap_or("");
+                        messages.push(serde_json::json!({"role": "user", "content": content}));
+                    }
                 }
                 "assistant" => {
                     if let Some(ref tool_calls) = msg.tool_calls {

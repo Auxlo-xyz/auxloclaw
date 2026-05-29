@@ -42,6 +42,7 @@ impl OpenAIAdapter {
             tool_calls: None,
             tool_call_id: None,
             name: None,
+            content_parts: None,
         }];
         result.extend(other_messages);
         result
@@ -73,25 +74,39 @@ impl ProviderAdapter for OpenAIAdapter {
     }
 
     fn transform_request(&self, request: &CompletionRequest) -> serde_json::Value {
-        let messages = self.deduplicate_system_messages(&request.messages);
-        let body = serde_json::json!({
+        let deduped = self.deduplicate_system_messages(&request.messages);
+        let messages: Vec<serde_json::Value> = deduped.iter().map(|msg| {
+            if let Some(ref parts) = msg.content_parts {
+                // Multimodal: serialize content as array of parts
+                serde_json::json!({
+                    "role": msg.role,
+                    "content": parts,
+                })
+            } else {
+                serde_json::json!({
+                    "role": msg.role,
+                    "content": msg.content,
+                    "tool_calls": msg.tool_calls,
+                    "tool_call_id": msg.tool_call_id,
+                    "name": msg.name,
+                })
+            }
+        }).collect();
+
+        let mut body = serde_json::json!({
             "model": request.model,
             "messages": messages,
             "temperature": request.temperature.unwrap_or(1.0),
             "max_tokens": request.max_tokens.unwrap_or(8192),
             "stream": request.stream.unwrap_or(false),
         });
+
         if let Some(ref tools) = request.tools {
             if !tools.is_empty() {
-                let mut body_map = body.as_object().cloned().unwrap_or_default();
-                body_map.insert("tools".to_string(), serde_json::to_value(tools).unwrap());
-                serde_json::Value::Object(body_map)
-            } else {
-                body
+                body["tools"] = serde_json::to_value(tools).unwrap();
             }
-        } else {
-            body
         }
+        body
     }
 
     fn parse_response(&self, body: &str) -> Result<CompletionResponse> {

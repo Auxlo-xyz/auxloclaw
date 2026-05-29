@@ -15,7 +15,7 @@ use crate::memory::{HistoryMessage, SessionHistory, SessionStore};
 use crate::orchestrator::ToolOrchestrator;
 use crate::persona::SystemPromptBuilder;
 use crate::persona::{shared::load_current_persona, PersonaConfig};
-use crate::providers::{CompletionRequest, Message, ProviderPool, StreamChunk, ToolCall};
+use crate::providers::{CompletionRequest, ContentPart, ImageUrlPayload, Message, ProviderPool, StreamChunk, ToolCall};
 use crate::agent::{Intervention, InterventionRegistry};
 
 /// Agent events streamed to consumers
@@ -66,6 +66,31 @@ fn is_readonly_tool(name: &str) -> bool {
             | "read_webpage"
             | "view_webpage"
     )
+}
+
+/// If a tool result contains `__vision__` data, build a multimodal message
+/// that injects the image into the conversation for the model to see.
+fn try_build_vision_message(result_str: &str) -> Option<Message> {
+    let v: serde_json::Value = serde_json::from_str(result_str).ok()?;
+    if !v.get("__vision__")?.as_bool()? { return None; }
+    let prompt = v.get("prompt")?.as_str()?;
+    let mime = v.get("mime")?.as_str()?;
+    let b64 = v.get("base64")?.as_str()?;
+    let detail = v.get("detail").and_then(|d| d.as_str()).map(|s| s.to_string());
+    let data_url = format!("data:{};base64,{}", mime, b64);
+    Some(Message {
+        role: "user".into(),
+        content: None,
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+        content_parts: Some(vec![
+            ContentPart::Text { text: prompt.to_string() },
+            ContentPart::ImageUrl {
+                image_url: ImageUrlPayload { url: data_url, detail },
+            },
+        ]),
+    })
 }
 
 /// Streaming agent wrapper
@@ -318,6 +343,11 @@ impl StreamingAgent {
                                 .await;
 
                             messages.push(Message::tool_result(id.clone(), name.clone(), crate::context::spill_tool_output(&result_str, config.agent.tool_output_max_chars, &name)));
+
+                            // Inject vision image as multimodal message if present
+                            if let Some(vision_msg) = try_build_vision_message(&result_str) {
+                                messages.push(vision_msg);
+                            }
                         }
                     }
 
@@ -356,6 +386,11 @@ impl StreamingAgent {
                         }
 
                         messages.push(Message::tool_result(tc.id.clone(), tc.function.name.clone(), crate::context::spill_tool_output(&result_str, config.agent.tool_output_max_chars, &tc.function.name)));
+
+                        // Inject vision image as multimodal message if present
+                        if let Some(vision_msg) = try_build_vision_message(&result_str) {
+                            messages.push(vision_msg);
+                        }
                     }
 
                     let _ = tx.send(AgentEvent::ToolRoundComplete).await;

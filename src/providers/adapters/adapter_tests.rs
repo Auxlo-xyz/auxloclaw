@@ -99,6 +99,7 @@ mod tests {
                     }]),
                     tool_call_id: None,
                     name: None,
+                    content_parts: None,
                 },
                 Message {
                     role: "tool".into(),
@@ -106,6 +107,7 @@ mod tests {
                     tool_calls: None,
                     tool_call_id: Some("tlu_01".into()),
                     name: Some("web_search".into()),
+                    content_parts: None,
                 },
             ],
             None,

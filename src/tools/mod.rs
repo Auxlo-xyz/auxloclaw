@@ -5,6 +5,7 @@ pub mod executor;
 pub mod send_message;
 pub mod subagent;
 pub mod stealth;
+pub mod vision;
 pub mod web;
 
 pub use builtin::*;
