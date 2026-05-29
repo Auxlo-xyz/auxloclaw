@@ -150,6 +150,16 @@ pub struct AgentCore {
     schedule_log: Option<crate::scheduler::ScheduleRunLog>,
     /// SQLite memory store for cross-session context
     memory_store: Option<Arc<MemoryStore>>,
+    /// Structured outputs collected during the last process() call
+    last_structured_outputs: parking_lot::RwLock<Vec<StructuredOutput>>,
+}
+
+/// A structured output artifact the agent produced.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StructuredOutput {
+    pub format: String,
+    pub filename: Option<String>,
+    pub content: serde_json::Value,
 }
 
 impl AgentCore {
@@ -241,7 +251,28 @@ impl AgentCore {
             override_system_prompt: Arc::new(RwLock::new(None)),
             schedule_log,
             memory_store,
+            last_structured_outputs: parking_lot::RwLock::new(Vec::new()),
         })
+    }
+
+    /// Drain structured outputs from the last process() call.
+    pub fn drain_structured_outputs(&self) -> Vec<StructuredOutput> {
+        let mut outputs = self.last_structured_outputs.write();
+        std::mem::take(&mut *outputs)
+    }
+
+    /// Collect any structured output from a tool result string.
+    fn collect_structured_output(&self, result_str: &str) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(result_str) {
+            if v.get("__structured_output__").and_then(|b| b.as_bool()).unwrap_or(false) {
+                let output = StructuredOutput {
+                    format: v["format"].as_str().unwrap_or("json").to_string(),
+                    filename: v["filename"].as_str().map(|s| s.to_string()),
+                    content: v["content"].clone(),
+                };
+                self.last_structured_outputs.write().push(output);
+            }
+        }
     }
 
     pub async fn load_sessions(&self) -> Result<()> {
@@ -470,6 +501,7 @@ impl AgentCore {
                             // Execute each tool
                             for tool_call in tool_calls {
                                 let result = self.execute_tool(tool_call).await;
+                                self.collect_structured_output(&result);
                                 total_tool_calls += 1;
                                 let success = !result.starts_with("Tool error:");
                                 let summary = if result.len() > 500 {

@@ -12,15 +12,10 @@ use std::path::Path;
 const VISION_ENDPOINT: &str = "https://gateway.auxlo.xyz/v1/chat/completions";
 const VISION_MODEL: &str = "gemini-3.1-flash-lite";
 
-fn vision_api_key() -> String {
-    std::env::var("GEMINI_API_KEY").unwrap_or_default()
-}
-
 async fn call_vision_api(messages: serde_json::Value) -> anyhow::Result<String> {
     let client = reqwest::Client::new();
     let resp = client
         .post(VISION_ENDPOINT)
-        .header("Authorization", format!("Bearer {}", vision_api_key()))
         .header("Content-Type", "application/json")
         .json(&messages)
         .send()

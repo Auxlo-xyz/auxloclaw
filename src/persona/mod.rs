@@ -346,7 +346,8 @@ impl SystemPromptBuilder {
             desc.push_str("- **Coordinate multi-agent work** using the blackboard (shared state with TTL/tags) and orchestrate tool (launch parallel sub-agents with shared context)\n");
             desc.push_str("- **Analyze images** using analyze_image -- send images to the vision model for understanding\n");
             desc.push_str("- **Analyze videos** using analyze_video -- extract key frames from video and analyze with vision\n");
-            desc.push_str("- **Read documents** using read_document -- extract text from PDFs\n\n");
+            desc.push_str("- **Read documents** using read_document -- extract text from PDFs\n");
+            desc.push_str("- **Return structured output** using output -- return JSON, CSV, files, images, videos as downloadable attachments (not just chat text)\n\n");
             desc.push_str("You should proactively use these capabilities. Do NOT say you cannot do something if you have a tool for it.\n");
             desc.push_str("Be confident in your abilities. You are not a passive assistant - you are an autonomous agent.\n");
             desc.push_str("\n**For long-running tasks:** Use send_message to update the user periodically. Do not wait for the full response cycle to report progress.\n");
@@ -491,6 +492,15 @@ impl SystemPromptBuilder {
                 formatted.push_str("  - Creates a recurring scheduled job with a cron expression\n");
                 formatted.push_str("  - The agent runs the given prompt autonomously at the scheduled time\n");
                 formatted.push_str("  - Use for recurring tasks: daily reports, monitoring, cleanup\n");
+            }
+            "output" => {
+                formatted.push_str("  Usage: {\"tool\": \"output\", \"arguments\": {\"format\": \"json\", \"content\": {\"key\": \"value\"}, \"filename\": \"result.json\"}}\n");
+                formatted.push_str("  - Returns structured data to the user as a downloadable file\n");
+                formatted.push_str("  - format: \"json\", \"csv\", \"markdown\", \"file\", \"image\", \"video\"\n");
+                formatted.push_str("  - For json/csv/markdown: content is the data string/object\n");
+                formatted.push_str("  - For file/image/video: content is the absolute file path\n");
+                formatted.push_str("  - filename: optional name for the download\n");
+                formatted.push_str("  - Use instead of printing large data inline\n");
             }
             _ => {
                 formatted.push_str(&format!(

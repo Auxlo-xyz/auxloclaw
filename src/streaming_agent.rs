@@ -15,7 +15,7 @@ use crate::memory::{HistoryMessage, SessionHistory, SessionStore};
 use crate::orchestrator::ToolOrchestrator;
 use crate::persona::SystemPromptBuilder;
 use crate::persona::{shared::load_current_persona, PersonaConfig};
-use crate::providers::{CompletionRequest, ContentPart, ImageUrlPayload, Message, ProviderPool, StreamChunk, ToolCall};
+use crate::providers::{CompletionRequest, Message, ProviderPool, StreamChunk, ToolCall};
 use crate::agent::{Intervention, InterventionRegistry};
 
 /// Agent events streamed to consumers
@@ -43,6 +43,12 @@ pub enum AgentEvent {
     },
     /// All tool calls in a round completed
     ToolRoundComplete,
+    /// Structured output from the agent (JSON, CSV, file, etc.)
+    StructuredOutput {
+        format: String,
+        filename: Option<String>,
+        content: serde_json::Value,
+    },
     /// Final response ready
     Done { response: String },
     /// Error occurred
@@ -68,59 +74,16 @@ fn is_readonly_tool(name: &str) -> bool {
     )
 }
 
-/// If a tool result contains `__vision__` data, build a multimodal message
-/// that injects the image into the conversation for the model to see.
-/// Also handles `__vision_multi__` for video frames (multiple images).
-fn try_build_vision_message(result_str: &str) -> Option<Message> {
-    let v: serde_json::Value = serde_json::from_str(result_str).ok()?;
-
-    // Multi-frame vision (video analysis)
-    if v.get("__vision_multi__").and_then(|b| b.as_bool()).unwrap_or(false) {
-        let prompt = v.get("prompt")?.as_str()?;
-        let frames = v.get("frames")?.as_array()?;
-        if frames.is_empty() { return None; }
-
-        let mut parts = vec![ContentPart::Text { text: prompt.to_string() }];
-        for frame in frames {
-            let mime = frame.get("mime")?.as_str()?;
-            let b64 = frame.get("base64")?.as_str()?;
-            let detail = frame.get("detail").and_then(|d| d.as_str()).map(|s| s.to_string());
-            let data_url = format!("data:{};base64,{}", mime, b64);
-            parts.push(ContentPart::ImageUrl {
-                image_url: ImageUrlPayload { url: data_url, detail },
-            });
+/// Check if a tool result contains structured output data and emit the event.
+async fn maybe_emit_structured_output(tx: &mpsc::Sender<AgentEvent>, result_str: &str) {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(result_str) {
+        if v.get("__structured_output__").and_then(|b| b.as_bool()).unwrap_or(false) {
+            let format = v["format"].as_str().unwrap_or("json").to_string();
+            let filename = v["filename"].as_str().map(|s| s.to_string());
+            let content = v["content"].clone();
+            let _ = tx.send(AgentEvent::StructuredOutput { format, filename, content }).await;
         }
-
-        return Some(Message {
-            role: "user".into(),
-            content: None,
-            tool_calls: None,
-            tool_call_id: None,
-            name: None,
-            content_parts: Some(parts),
-        });
     }
-
-    // Single-frame vision (image analysis)
-    if !v.get("__vision__")?.as_bool()? { return None; }
-    let prompt = v.get("prompt")?.as_str()?;
-    let mime = v.get("mime")?.as_str()?;
-    let b64 = v.get("base64")?.as_str()?;
-    let detail = v.get("detail").and_then(|d| d.as_str()).map(|s| s.to_string());
-    let data_url = format!("data:{};base64,{}", mime, b64);
-    Some(Message {
-        role: "user".into(),
-        content: None,
-        tool_calls: None,
-        tool_call_id: None,
-        name: None,
-        content_parts: Some(vec![
-            ContentPart::Text { text: prompt.to_string() },
-            ContentPart::ImageUrl {
-                image_url: ImageUrlPayload { url: data_url, detail },
-            },
-        ]),
-    })
 }
 
 /// Streaming agent wrapper
@@ -372,12 +335,9 @@ impl StreamingAgent {
                                 })
                                 .await;
 
-                            messages.push(Message::tool_result(id.clone(), name.clone(), crate::context::spill_tool_output(&result_str, config.agent.tool_output_max_chars, &name)));
+                            maybe_emit_structured_output(&tx, &result_str).await;
 
-                            // Inject vision image as multimodal message if present
-                            if let Some(vision_msg) = try_build_vision_message(&result_str) {
-                                messages.push(vision_msg);
-                            }
+                            messages.push(Message::tool_result(id.clone(), name.clone(), crate::context::spill_tool_output(&result_str, config.agent.tool_output_max_chars, &name)));
                         }
                     }
 
@@ -413,14 +373,11 @@ impl StreamingAgent {
                                     result: result_str.clone(),
                                 })
                                 .await;
+
+                            maybe_emit_structured_output(&tx, &result_str).await;
                         }
 
                         messages.push(Message::tool_result(tc.id.clone(), tc.function.name.clone(), crate::context::spill_tool_output(&result_str, config.agent.tool_output_max_chars, &tc.function.name)));
-
-                        // Inject vision image as multimodal message if present
-                        if let Some(vision_msg) = try_build_vision_message(&result_str) {
-                            messages.push(vision_msg);
-                        }
                     }
 
                     let _ = tx.send(AgentEvent::ToolRoundComplete).await;

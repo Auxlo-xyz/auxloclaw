@@ -898,9 +898,19 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
         .await;
     state.update_session(chat_id, None).await;
 
+    // Send text response
     if let Err(err) = send_markdown_message(&bot, chat_id, &response).await {
         tracing::warn!("Telegram send error: {err:?}");
     }
+
+    // Drain and send any structured outputs
+    let structured = state.agent.drain_structured_outputs();
+    for output in structured {
+        if let Err(err) = send_structured_output(&bot, chat_id, &output).await {
+            tracing::warn!("Failed to send structured output: {err:?}");
+        }
+    }
+
     Ok(())
 }
 
@@ -961,4 +971,62 @@ fn split_telegram_message(text: &str, max_chars: usize) -> Vec<String> {
         .chunks(max_chars)
         .map(|chunk| chunk.iter().collect::<String>())
         .collect()
+}
+
+/// Send a structured output to Telegram.
+/// File/image/video: send as document/photo/video attachment.
+/// JSON/CSV/markdown: write to temp file, send as document.
+async fn send_structured_output(
+    bot: &Bot,
+    chat_id: i64,
+    output: &crate::agent::StructuredOutput,
+) -> anyhow::Result<()> {
+    use teloxide::types::InputFile;
+
+    match output.format.as_str() {
+        "image" => {
+            let path = output.content.as_str().unwrap_or_default();
+            let photo = InputFile::file(path);
+            bot.send_photo(teloxide::types::ChatId(chat_id), photo)
+                .await?;
+        }
+        "video" => {
+            let path = output.content.as_str().unwrap_or_default();
+            let video = InputFile::file(path);
+            bot.send_video(teloxide::types::ChatId(chat_id), video)
+                .await?;
+        }
+        "file" => {
+            let path = output.content.as_str().unwrap_or_default();
+            let mut doc = InputFile::file(path);
+            if let Some(ref name) = output.filename {
+                doc = doc.file_name(name.clone());
+            }
+            bot.send_document(teloxide::types::ChatId(chat_id), doc)
+                .await?;
+        }
+        "json" | "csv" | "markdown" => {
+            let content = match output.format.as_str() {
+                "json" => serde_json::to_string_pretty(&output.content).unwrap_or_else(|_| output.content.to_string()),
+                _ => output.content.as_str().unwrap_or(&output.content.to_string()).to_string(),
+            };
+            let filename = output.filename.clone().unwrap_or_else(|| match output.format.as_str() {
+                "json" => "output.json".into(),
+                "csv" => "output.csv".into(),
+                "markdown" => "output.md".into(),
+                _ => "output.txt".into(),
+            });
+            let ext = filename.rsplit('.').next().unwrap_or("txt");
+            let tmp = std::env::temp_dir().join(format!("auxlo_structured_{}.{}", uuid::Uuid::new_v4(), ext));
+            std::fs::write(&tmp, &content)?;
+            let doc = InputFile::file(&tmp).file_name(filename);
+            let _ = bot.send_document(teloxide::types::ChatId(chat_id), doc)
+                .await;
+            let _ = std::fs::remove_file(&tmp);
+        }
+        _ => {
+            tracing::warn!("Unknown structured output format: {}", output.format);
+        }
+    }
+    Ok(())
 }
