@@ -1,6 +1,6 @@
 [package]
 name = "auxloclaw"
-version = "0.9.4"
+version = "0.9.5"
 edition = "2021"
 authors = ["Auxlo.xyz <hello@auxlo.xyz>"]
 description = "Ultra-high-performance AI agent framework - beats Hermes and Nanobot"
@@ -45,6 +45,7 @@ dotenvy = "0.15"
 # Logging & Tracing
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
 
 # Utilities
 thiserror = "1"

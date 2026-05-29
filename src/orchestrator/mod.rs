@@ -89,8 +89,31 @@ impl ToolOrchestrator {
     }
 
     pub fn register_schedule_tool(&self, log: crate::scheduler::ScheduleRunLog) {
-        use crate::tools::builtin::ListScheduledJobsTool;
-        self.register(Arc::new(ListScheduledJobsTool::new(log)));
+        use crate::tools::scheduler_tools::{SchedulerManager, ListScheduledJobsEnhancedTool};
+        let config_path = dirs::home_dir()
+            .map(|h| h.join(".auxloclaw/config.toml"))
+            .unwrap_or_else(|| std::path::PathBuf::from("~/.auxloclaw/config.toml"));
+        let manager = SchedulerManager::new(log, config_path.to_string_lossy().to_string());
+        self.register(Arc::new(ListScheduledJobsEnhancedTool::new(manager)));
+    }
+
+    pub fn register_schedule_management_tools(&self, manager: crate::tools::scheduler_tools::SchedulerManager) {
+        use crate::tools::scheduler_tools::{
+            CreateScheduledJobTool, UpdateScheduledJobTool, DeleteScheduledJobTool,
+        };
+        self.register(Arc::new(CreateScheduledJobTool::new(manager.clone())));
+        self.register(Arc::new(UpdateScheduledJobTool::new(manager.clone())));
+        self.register(Arc::new(DeleteScheduledJobTool::new(manager)));
+    }
+
+    pub fn register_blackboard_tools(
+        &self,
+        blackboard: crate::coordination::SharedBlackboard,
+        coordinator: Arc<tokio::sync::RwLock<Option<Arc<crate::coordination::AgentCoordinator>>>>,
+    ) {
+        use crate::tools::blackboard::{BlackboardTool, OrchestrateTool};
+        self.register(Arc::new(BlackboardTool::new(blackboard.clone())));
+        self.register(Arc::new(OrchestrateTool::new(coordinator, blackboard)));
     }
 
     pub fn register_code_tools(&self) {

@@ -164,6 +164,27 @@ pub enum Commands {
         #[command(subcommand)]
         action: memory::MemorySubcommand,
     },
+    /// View gateway logs
+    Logs {
+        /// Number of lines to show
+        #[arg(default_value_t = 50)]
+        lines: usize,
+        /// Filter lines containing this pattern
+        #[arg(short, long)]
+        filter: Option<String>,
+        /// Show only errors and warnings
+        #[arg(short, long)]
+        errors: bool,
+        /// Clear the log file
+        #[arg(long)]
+        clear: bool,
+    },
+    /// Manage scheduled jobs
+    Schedule {
+        /// Subcommand: list, add, remove, enable, disable, info
+        #[arg(trailing_var_arg = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]

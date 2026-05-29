@@ -46,10 +46,21 @@ use cli::{Cli, Commands};
 async fn main() -> anyhow::Result<()> {
     let args = Cli::parse_args();
 
-    // Initialize logging
+    // Initialize logging with file appender (writes to both stderr and ~/.auxloclaw/logs/)
     let level = if args.debug { "debug" } else { "info" };
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new(level))
+    let log_dir = dirs::home_dir()
+        .map(|h| h.join(".auxloclaw/logs"))
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/auxloclaw/logs"));
+    let _ = std::fs::create_dir_all(&log_dir);
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "gateway.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    use tracing_subscriber::prelude::*;
+    let stderr_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
+    let file_layer = tracing_subscriber::fmt::layer().with_writer(non_blocking).with_ansi(false);
+    tracing_subscriber::registry()
+        .with(EnvFilter::new(level))
+        .with(stderr_layer)
+        .with(file_layer)
         .init();
 
     // Handle commands
@@ -179,6 +190,58 @@ async fn main() -> anyhow::Result<()> {
                 println!("{}", resp);
             }
         }
+
+        Commands::Logs { lines, filter, errors, clear } => {
+            let mut args_parts = Vec::new();
+            if clear {
+                args_parts.push("--clear".to_string());
+            } else {
+                args_parts.push(lines.to_string());
+                if errors {
+                    args_parts.push("--errors".to_string());
+                }
+                if let Some(f) = filter {
+                    args_parts.push("--filter".to_string());
+                    args_parts.push(f);
+                }
+            }
+            let result = commands::logs::handle_logs(&args_parts.join(" ")).await;
+            println!("{}", result);
+        }
+
+        Commands::Schedule { args } => {
+            if args.is_empty() || args[0] == "list" {
+                let config_path = dirs::home_dir()
+                    .map(|h| h.join(".auxloclaw/config.toml"))
+                    .unwrap_or_else(|| std::path::PathBuf::from("~/.auxloclaw/config.toml"));
+                let config = config::AppConfig::load(&config_path.to_string_lossy())?;
+                if config.scheduler.jobs.is_empty() {
+                    println!("No scheduled jobs configured.");
+                } else {
+                    println!("Scheduled Jobs\n");
+                    for job in &config.scheduler.jobs {
+                        println!("  {} ({})\n    Cron: {}\n    Prompt: {}\n    Timeout: {}s\n",
+                            job.name,
+                            if job.enabled { "enabled" } else { "disabled" },
+                            job.cron,
+                            job.prompt.chars().take(80).collect::<String>(),
+                            job.timeout_secs,
+                        );
+                    }
+                }
+            } else {
+                let config_path = dirs::home_dir()
+                    .map(|h| h.join(".auxloclaw/config.toml"))
+                    .unwrap_or_else(|| std::path::PathBuf::from("~/.auxloclaw/config.toml"));
+                let run_log = scheduler::create_run_log(&[]);
+                let manager = tools::SchedulerManager::new(
+                    run_log,
+                    config_path.to_string_lossy().to_string(),
+                );
+                let result = commands::schedule::handle_schedule(&args.join(" "), &manager).await;
+                println!("{}", result);
+            }
+        }
     }
 
     Ok(())
@@ -250,6 +313,14 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     // Schedule run log -- shared between orchestrator (tool) and agent (system prompt)
     let schedule_log = scheduler::create_run_log(&config.scheduler.jobs);
     raw_orchestrator.register_schedule_tool(schedule_log.clone());
+
+    // Scheduler manager for runtime CRUD on scheduled jobs
+    let config_path_str = config_path.to_string_lossy().to_string();
+    let scheduler_manager = tools::SchedulerManager::new(schedule_log.clone(), config_path_str.clone());
+    raw_orchestrator.register_schedule_management_tools(scheduler_manager.clone());
+
+    // Shared blackboard for multi-agent coordination
+    let blackboard = coordination::SharedBlackboard::new();
 
     let orchestrator = Arc::new(raw_orchestrator);
     if config.mcp.enabled {
@@ -327,6 +398,9 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
         *coord_guard = Some(coordinator_instance);
     }
     tracing::info!("Sub-agent coordinator initialized");
+
+    // Register blackboard tools (requires coordinator to be initialized)
+    orchestrator.register_blackboard_tools(blackboard.clone(), coordinator.clone());
 
     let _cron_scheduler =
         scheduler::CronScheduler::start(agent.clone(), config.scheduler.clone(), schedule_log.clone()).await?;

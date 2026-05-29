@@ -1,10 +1,12 @@
 //! Coordination Module - Sub-agent orchestration and task delegation
 //! Based on Claude Code's multi-agent architecture
 
+pub mod blackboard;
 pub mod sub_agent;
 pub mod cost_aware_delegation;
 pub mod task_delegation;
 
+pub use blackboard::SharedBlackboard;
 pub use sub_agent::{SubAgent, SubAgentConfig, SubAgentResult};
 pub use task_delegation::{TaskDelegator, DelegatedTask, TaskPriority};
 

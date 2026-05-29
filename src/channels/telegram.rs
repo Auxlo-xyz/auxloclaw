@@ -50,6 +50,10 @@ pub enum Command {
     New,
     #[command(description = "Exit coding mode")]
     Normal,
+    #[command(description = "View gateway logs")]
+    Logs(String),
+    #[command(description = "Manage scheduled jobs")]
+    Schedule(String),
     #[command(description = "Override model/provider settings")]
     Model(String),
     #[command(description = "Manage MCP server integrations")]
@@ -128,6 +132,8 @@ pub struct TelegramState {
     pending_model_flows: RwLock<HashMap<i64, ModelFlowState>>,
     /// Adapter for mid-task message delivery
     message_adapter: Option<Arc<crate::tools::TelegramAdapter>>,
+    /// Shared scheduler run log for /schedule command
+    schedule_log: crate::scheduler::ScheduleRunLog,
 }
 
 impl TelegramState {
@@ -137,6 +143,7 @@ impl TelegramState {
         code_mode: Arc<crate::memory::CodeModeStore>,
         config: TelegramConfig,
         message_adapter: Option<Arc<crate::tools::TelegramAdapter>>,
+        schedule_log: crate::scheduler::ScheduleRunLog,
     ) -> Self {
         Self {
             agent,
@@ -146,6 +153,7 @@ impl TelegramState {
             config,
             pending_model_flows: RwLock::new(HashMap::new()),
             message_adapter,
+            schedule_log,
         }
     }
 
@@ -229,7 +237,7 @@ pub async fn start(
         tracing::info!("Telegram registered with message router");
     }
 
-    let state = Arc::new(TelegramState::new(agent, model_store, code_mode, config, Some(tg_adapter)));
+    let state = Arc::new(TelegramState::new(agent, model_store, code_mode, config, Some(tg_adapter), crate::scheduler::ScheduleRunLog::default()));
 
     let commands = vec![
         teloxide::types::BotCommand { command: "memory".into(), description: "View agent memory".into() },
@@ -473,6 +481,23 @@ async fn handle_command(
             }
             let response = crate::commands::token::handle_token(&args)
                 .unwrap_or_else(|e| format!("Error: {}", e));
+            send_markdown_message(&bot, chat_id, &response).await?;
+            return Ok(());
+        }
+        Command::Logs(args) => {
+            let response = crate::commands::logs::handle_logs(&args).await;
+            send_markdown_message(&bot, chat_id, &response).await?;
+            return Ok(());
+        }
+        Command::Schedule(args) => {
+            let config_path = dirs::home_dir()
+                .map(|h| h.join(".auxloclaw/config.toml"))
+                .unwrap_or_else(|| std::path::PathBuf::from("~/.auxloclaw/config.toml"));
+            let scheduler_manager = crate::tools::scheduler_tools::SchedulerManager::new(
+                state.schedule_log.clone(),
+                config_path.to_string_lossy().to_string(),
+            );
+            let response = crate::commands::schedule::handle_schedule(&args, &scheduler_manager).await;
             send_markdown_message(&bot, chat_id, &response).await?;
             return Ok(());
         }
