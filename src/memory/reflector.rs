@@ -168,8 +168,8 @@ impl Reflector {
             return Ok(None);
         }
 
-        // Call pollinations.ai for reflection
-        let response = self.call_pollinations(&prompt).await?;
+        // Call AI gateway for reflection
+        let response = self.call_gateway(&prompt).await?;
 
         // Parse the JSON response -- retry once if truncated
         let reflection = match self.parse_reflection(&response, &session.session_id, session.messages.len()) {
@@ -180,7 +180,7 @@ impl Reflector {
                     "{}\n\nIMPORTANT: Return ONLY a valid JSON object. No prose, no markdown fences, no explanation. Just the raw JSON object.",
                     prompt
                 );
-                let retry_response = self.call_pollinations(&retry_prompt).await?;
+                let retry_response = self.call_gateway(&retry_prompt).await?;
                 self.parse_reflection(&retry_response, &session.session_id, session.messages.len())
                     .context(format!("Reflection parse failed after retry. Original error: {}", e))?
             }
@@ -293,9 +293,10 @@ Conversation:
         messages[start..].iter().collect()
     }
 
-    /// Call pollinations.ai for reflection
-    async fn call_pollinations(&self, prompt: &str) -> Result<String> {
+    /// Call the native AI gateway for reflection
+    async fn call_gateway(&self, prompt: &str) -> Result<String> {
         let body = serde_json::json!({
+            "model": "gemma-4-31b-it",
             "messages": [
                 {
                     "role": "user",
@@ -307,24 +308,33 @@ Conversation:
 
         let client = reqwest::Client::new();
         let response = client
-            .post("https://text.pollinations.ai/")
+            .post("https://gateway.auxlo.xyz/v1/chat/completions")
             .header("Content-Type", "application/json")
             .json(&body)
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(std::time::Duration::from_secs(30))
             .send()
             .await
-            .context("Failed to call pollinations.ai")?;
+            .context("Failed to call AI gateway")?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Pollinations.ai error: {} - {}", status, body);
+            anyhow::bail!("AI gateway error: {} - {}", status, body);
         }
 
-        let text = response
-            .text()
+        let resp: serde_json::Value = response
+            .json()
             .await
-            .context("Failed to read pollinations.ai response")?;
+            .context("Failed to parse AI gateway response")?;
+
+        let text = resp["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        if text.is_empty() {
+            anyhow::bail!("AI gateway returned empty content");
+        }
 
         Ok(text)
     }
