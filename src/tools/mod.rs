@@ -10,6 +10,7 @@ pub mod subagent;
 pub mod stealth;
 pub mod vision;
 pub mod web;
+pub mod session_tools;
 
 pub use blackboard::{BlackboardTool, OrchestrateTool};
 pub use builtin::*;

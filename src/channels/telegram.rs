@@ -518,10 +518,7 @@ async fn handle_command(
         }
         Command::New => {
             let user_id = format!("{}", chat_id);
-            let session_id = state.agent.get_or_create_session_id("telegram", &user_id);
-            state.agent.clear_session(&session_id).await;
             state.agent.reset_session_routing("telegram", &user_id);
-            state.clear_session(chat_id).await;
             "New session started".to_string()
         }
     };

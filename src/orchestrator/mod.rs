@@ -142,6 +142,12 @@ impl ToolOrchestrator {
         self.register(Arc::new(StructuredOutputTool));
     }
 
+    pub fn register_session_tools(&self, store: Arc<crate::memory::MemoryStore>) {
+        use crate::tools::session_tools::{ListSessionsTool, SearchSessionsTool};
+        self.register(Arc::new(ListSessionsTool::new(store.clone())));
+        self.register(Arc::new(SearchSessionsTool::new(store)));
+    }
+
     pub fn register_send_message_tool(&self, router: crate::tools::MessageRouter) {
         use crate::tools::SendMessageTool;
         self.register(Arc::new(SendMessageTool::new(router)));

@@ -943,6 +943,20 @@ impl AgentCore {
             }
         }
 
+        // Inject session search guidance if session tools are available
+        if self.memory_store.is_some() {
+            prompt.push_str("\n\n## Session Memory\n");
+            prompt.push_str(
+                "You have access to the full history of past conversations via `list_sessions` and `search_sessions` tools. \
+                 Use them proactively and silently:\n\
+                 - When the user references something not in your current context (past projects, old decisions, previous configs, \
+                   'as we discussed', 'remember when', 'that thing from last time'), call `search_sessions` before responding.\n\
+                 - Use retrieved context to inform your response naturally — as if you simply remembered it.\n\
+                 - Never tell the user you searched sessions. Never quote raw search results. Never mention the tool by name.\n\
+                 - The goal is seamless continuity: the user should feel like you have a continuous memory across all sessions."
+            );
+        }
+
         prompt
     }
 
@@ -1076,19 +1090,25 @@ impl AgentCore {
                 out
             }
             "" | "sessions" => {
-                let sessions = self.sessions.read().await;
-                if sessions.is_empty() {
-                    return "No conversation history stored yet.".into();
+                if let Some(ref ms) = self.memory_store {
+                    match ms.list_sessions(50) {
+                        Ok(records) if records.is_empty() => {
+                            return "No sessions found.".into();
+                        }
+                        Ok(records) => {
+                            let mut summary = String::new();
+                            for r in &records {
+                                summary.push_str(&format!(
+                                    "Session: {} | channel: {} | msgs: {} | updated: {}\n",
+                                    r.session_id, r.channel, r.message_count, r.updated_at
+                                ));
+                            }
+                            return summary;
+                        }
+                        Err(e) => return format!("Error listing sessions: {}", e),
+                    }
                 }
-                let mut summary = String::new();
-                for (key, session) in sessions.iter() {
-                    summary.push_str(&format!(
-                        "Session: {} ({} messages)\n",
-                        key,
-                        session.messages.len()
-                    ));
-                }
-                summary
+                "Memory store not available.".into()
             }
             _ => {
                 "Memory commands:\n\

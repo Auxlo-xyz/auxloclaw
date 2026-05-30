@@ -197,12 +197,21 @@ pub struct SessionRecord {
     pub session_id: String,
     pub channel: String,
     pub user_id: Option<String>,
-    pub created_at: u64,
-    pub updated_at: u64,
     pub message_count: i64,
+    pub updated_at: u64,
+    pub created_at: u64,
     pub user_goal: Option<String>,
     pub completed: Option<String>,
     pub next_steps: Option<String>,
+}
+
+/// A message record from SQLite (for search results)
+#[derive(Debug, Clone)]
+pub struct MessageRecord {
+    pub session_id: String,
+    pub role: String,
+    pub content: String,
+    pub timestamp: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -411,6 +420,47 @@ impl MemoryStore {
             |row| row.get(0),
         )?;
         Ok(count as usize)
+    }
+
+    /// Search messages by content keyword, optionally scoped to a session.
+    pub fn search_messages(&self, query: &str, session_id: Option<&str>, limit: usize) -> Result<Vec<MessageRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let pattern = format!("%{}%", query);
+        let mut result = Vec::new();
+
+        if let Some(sid) = session_id {
+            let mut stmt = conn.prepare(
+                "SELECT session_id, role, content, timestamp FROM messages
+                 WHERE content LIKE ?1 AND session_id = ?2
+                 ORDER BY timestamp DESC LIMIT ?3",
+            )?;
+            let mut rows = stmt.query(rusqlite::params![pattern, sid, limit as i64])?;
+            while let Some(row) = rows.next()? {
+                result.push(MessageRecord {
+                    session_id: row.get(0)?,
+                    role: row.get(1)?,
+                    content: row.get(2)?,
+                    timestamp: row.get(3)?,
+                });
+            }
+        } else {
+            let mut stmt = conn.prepare(
+                "SELECT session_id, role, content, timestamp FROM messages
+                 WHERE content LIKE ?1
+                 ORDER BY timestamp DESC LIMIT ?2",
+            )?;
+            let mut rows = stmt.query(rusqlite::params![pattern, limit as i64])?;
+            while let Some(row) = rows.next()? {
+                result.push(MessageRecord {
+                    session_id: row.get(0)?,
+                    role: row.get(1)?,
+                    content: row.get(2)?,
+                    timestamp: row.get(3)?,
+                });
+            }
+        }
+
+        Ok(result)
     }
 
     pub fn fact_count(&self) -> Result<usize> {

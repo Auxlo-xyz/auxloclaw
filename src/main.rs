@@ -281,10 +281,27 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     // Initialize core components
     let memory = Arc::new(memory::MemoryEngine::new(&config.memory)?);
     let providers = Arc::new(providers::ProviderPool::new(config.providers.clone()));
+
+    // Initialize SQLite memory store (must come before orchestrator for session tools)
+    let db_path = std::path::Path::new(&session_db);
+    let memory_store = match memory::MemoryStore::new(db_path) {
+        Ok(store) => {
+            info!("SQLite memory store initialized at {}", session_db);
+            Some(Arc::new(store))
+        }
+        Err(e) => {
+            tracing::warn!("Failed to init SQLite memory store: {}", e);
+            None
+        }
+    };
+
     let mut raw_orchestrator = orchestrator::ToolOrchestrator::new();
-    // Register coding workspace tools for /code mode
     raw_orchestrator.register_code_tools();
     raw_orchestrator.register_vision_tools();
+    // Register session history tools if memory store is available
+    if let Some(ref ms) = memory_store {
+        raw_orchestrator.register_session_tools(ms.clone());
+    }
     let mut raw_plugins = plugins::PluginManager::new(config.plugins.clone());
     raw_plugins.set_tools(raw_orchestrator.list_tools());
     let plugins = Arc::new(raw_plugins);
@@ -327,19 +344,6 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
         let count = orchestrator.register_mcp_tools(&config.mcp).await?;
         info!("{} Registered {} MCP tools", "", count);
     }
-
-    // Initialize SQLite memory store first (shared by session store + reflector)
-    let db_path = std::path::Path::new(&session_db);
-    let memory_store = match memory::MemoryStore::new(db_path) {
-        Ok(store) => {
-            info!("SQLite memory store initialized at {}", session_db);
-            Some(Arc::new(store))
-        }
-        Err(e) => {
-            tracing::warn!("Failed to init SQLite memory store: {}", e);
-            None
-        }
-    };
 
     // Initialize persistent session store backed by SQLite
     let session_store = match &memory_store {
