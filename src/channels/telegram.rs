@@ -857,10 +857,29 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
         match download_telegram_file(&bot, &audio.file.id, "audio", filename).await {
             Ok(path) => {
                 let caption = msg.caption().unwrap_or("").to_string();
-                agent_message = if caption.is_empty() {
-                    format!("User sent an audio file. File saved at: {}\n\nRead/analyze this audio file as needed.", path)
-                } else {
-                    format!("User sent an audio file with caption: \"{}\"\n\nFile saved at: {}", caption, path)
+                // Auto-transcribe audio
+                let transcript_info = tokio::task::spawn_blocking({
+                    let p = path.clone();
+                    move || crate::tools::transcribe::transcribe_audio_sync(&p, "base", None)
+                }).await.unwrap_or_else(|e| Err(format!("Transcription task failed: {e}")));
+
+                agent_message = match (transcript_info, caption.is_empty()) {
+                    (Ok(tr), true) => format!(
+                        "User sent an audio file. File saved at: {}\n\n[Auto-transcription | {} | {:.1}s]\n{}",
+                        path, tr.language, tr.duration, tr.text
+                    ),
+                    (Ok(tr), false) => format!(
+                        "User sent an audio file with caption: \"{}\"\n\nFile saved at: {}\n\n[Auto-transcription | {} | {:.1}s]\n{}",
+                        caption, path, tr.language, tr.duration, tr.text
+                    ),
+                    (Err(e), true) => format!(
+                        "User sent an audio file. File saved at: {}\n\n(Transcription failed: {})\n\nUse the transcribe_audio tool to retry.",
+                        path, e
+                    ),
+                    (Err(e), false) => format!(
+                        "User sent an audio file with caption: \"{}\"\n\nFile saved at: {}\n\n(Transcription failed: {})\n\nUse the transcribe_audio tool to retry.",
+                        caption, path, e
+                    ),
                 };
                 media_downloaded.push(path);
             }
@@ -874,7 +893,22 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
     else if let Some(voice) = msg.voice() {
         match download_telegram_file(&bot, &voice.file.id, "audio", &format!("voice_{}.ogg", msg.id.0)).await {
             Ok(path) => {
-                agent_message = format!("User sent a voice message. File saved at: {}\n\nIf needed, transcribe or analyze this voice message.", path);
+                // Auto-transcribe voice message
+                let transcript_info = tokio::task::spawn_blocking({
+                    let p = path.clone();
+                    move || crate::tools::transcribe::transcribe_audio_sync(&p, "base", None)
+                }).await.unwrap_or_else(|e| Err(format!("Transcription task failed: {e}")));
+
+                agent_message = match transcript_info {
+                    Ok(tr) => format!(
+                        "User sent a voice message. File saved at: {}\n\n[Auto-transcription | {} | {:.1}s]\n{}",
+                        path, tr.language, tr.duration, tr.text
+                    ),
+                    Err(e) => format!(
+                        "User sent a voice message. File saved at: {}\n\n(Transcription failed: {})\n\nUse the transcribe_audio tool to retry.",
+                        path, e
+                    ),
+                };
                 media_downloaded.push(path);
             }
             Err(e) => {

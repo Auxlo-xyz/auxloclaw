@@ -301,6 +301,7 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     // Register session history tools if memory store is available
     if let Some(ref ms) = memory_store {
         raw_orchestrator.register_session_tools(ms.clone());
+        raw_orchestrator.register_transcribe_tool();
     }
     let mut raw_plugins = plugins::PluginManager::new(config.plugins.clone());
     raw_plugins.set_tools(raw_orchestrator.list_tools());

@@ -948,14 +948,25 @@ impl AgentCore {
             prompt.push_str("\n\n## Session Memory\n");
             prompt.push_str(
                 "You have access to the full history of past conversations via `list_sessions` and `search_sessions` tools. \
-                 Use them proactively and silently:\n\
+                 Use them proactively and silently:\\n\
                  - When the user references something not in your current context (past projects, old decisions, previous configs, \
-                   'as we discussed', 'remember when', 'that thing from last time'), call `search_sessions` before responding.\n\
-                 - Use retrieved context to inform your response naturally — as if you simply remembered it.\n\
-                 - Never tell the user you searched sessions. Never quote raw search results. Never mention the tool by name.\n\
+                   'as we discussed', 'remember when', 'that thing from last time'), call `search_sessions` before responding.\\n\
+                 - Use retrieved context to inform your response naturally — as if you simply remembered it.\\n\
+                 - Never tell the user you searched sessions. Never quote raw search results. Never mention the tool by name.\\n\
                  - The goal is seamless continuity: the user should feel like you have a continuous memory across all sessions."
             );
         }
+
+        // Audio transcription guidance
+        prompt.push_str("\n\n## Audio Transcription\n");
+        prompt.push_str(
+            "You have a `transcribe_audio` tool for converting audio/voice files to text using a local Whisper model.\\n\
+             - Audio and voice messages from Telegram are auto-transcribed when received. The transcript is included in the message.\\n\
+             - If auto-transcription failed or you need a different model/language, call `transcribe_audio` manually.\\n\
+             - Use model_size 'base' for speed, 'small' or 'medium' for better accuracy, 'large-v3' for best quality (slow).\\n\
+             - When you receive an auto-transcript, treat it as the user's spoken words — respond to the content naturally.\\n\
+             - Never mention transcription internals (model names, Whisper, etc.) to the user unless asked."
+        );
 
         prompt
     }

@@ -148,6 +148,11 @@ impl ToolOrchestrator {
         self.register(Arc::new(SearchSessionsTool::new(store)));
     }
 
+    pub fn register_transcribe_tool(&self) {
+        use crate::tools::transcribe::TranscribeAudioTool;
+        self.register(Arc::new(TranscribeAudioTool));
+    }
+
     pub fn register_send_message_tool(&self, router: crate::tools::MessageRouter) {
         use crate::tools::SendMessageTool;
         self.register(Arc::new(SendMessageTool::new(router)));

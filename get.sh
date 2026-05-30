@@ -143,8 +143,31 @@ with sync_playwright() as p:
         fi
     fi
 
-    # Deploy stealth_fetch helper script
+
     local HELPER_DIR="/usr/local/share/auxloclaw"
+
+    # Install faster-whisper (local audio transcription)
+    if ! python3 -c "import faster_whisper" 2>/dev/null; then
+        echo "Installing faster-whisper (audio transcription)..."
+        if ensure_pip; then
+            $PIP install faster-whisper --break-system-packages -q 2>&1 | tail -5                 || echo "Warning: faster-whisper install failed (manual: pip install faster-whisper)"
+        else
+            echo "Warning: faster-whisper install failed -- pip not available (manual: pip install faster-whisper)"
+        fi
+    fi
+
+    # Deploy transcribe helper script
+    local TRANSCRIBE_SCRIPT="${HELPER_DIR}/transcribe.py"
+    if [ ! -f "$TRANSCRIBE_SCRIPT" ]; then
+        echo "Deploying transcribe helper script..."
+        mkdir -p "$HELPER_DIR"
+        curl -fsSL "https://raw.githubusercontent.com/Auxlo-xyz/auxloclaw/master/scripts/transcribe.py" \
+            -o "$TRANSCRIBE_SCRIPT" \
+            && chmod +x "$TRANSCRIBE_SCRIPT" \
+            || echo "Warning: Failed to download transcribe helper script"
+    fi
+
+    # Deploy stealth_fetch helper script
     local HELPER_PATH="${HELPER_DIR}/stealth_fetch_helper.py"
     if [ ! -f "$HELPER_PATH" ]; then
         echo "Deploying stealth_fetch helper script..."
@@ -158,6 +181,7 @@ with sync_playwright() as p:
     echo "Browser: agent-browser (by Vercel)"
     echo "Web search: webserp (multi-engine, no API key)"
     echo "Stealth fetch: scrapling (anti-bot bypass, TLS fingerprint spoofing)"
+    echo "Audio transcription: faster-whisper (local Whisper model)"
 }
 
 main "$@"
