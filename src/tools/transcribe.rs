@@ -9,7 +9,15 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-/// Find the transcribe.py script. Auto-deploys
+/// Find the transcribe.py script.
+/// Search order:
+///   1. AUXLO_TRANSCRIBE_SCRIPT env var
+///   2. ~/.auxloclaw/scripts/transcribe.py
+///   3. /usr/local/share/auxloclaw/scripts/transcribe.py
+///   4. /usr/local/share/auxloclaw/transcribe.py (get.sh deploy path)
+///   5. scripts/transcribe.py next to binary
+///
+/// If none found, auto-downloads from GitHub to ~/.auxloclaw/scripts/transcribe.py.
 fn find_script() -> PathBuf {
     if let Ok(custom) = std::env::var("AUXLO_TRANSCRIBE_SCRIPT") {
         let p = PathBuf::from(custom);
@@ -18,20 +26,54 @@ fn find_script() -> PathBuf {
         }
     }
 
-    let home_script = dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/root"))
-        .join(".auxloclaw/scripts/transcribe.py");
-    if home_script.exists() {
-        return home_script;
+    let candidates = [
+        dirs::home_dir().unwrap_or_else(|| PathBuf::from("/root")).join(".auxloclaw/scripts/transcribe.py"),
+        PathBuf::from("/usr/local/share/auxloclaw/scripts/transcribe.py"),
+        PathBuf::from("/usr/local/share/auxloclaw/transcribe.py"),
+    ];
+
+    for p in &candidates {
+        if p.exists() {
+            return p.clone();
+        }
     }
 
-    let system_script = PathBuf::from("/usr/local/share/auxloclaw/scripts/transcribe.py");
-    if system_script.exists() {
-        return system_script;
+    // Also check relative to binary
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let rel = dir.join("scripts/transcribe.py");
+            if rel.exists() {
+                return rel;
+            }
+        }
     }
 
-    // Fallback: next to the binary
-    PathBuf::from("scripts/transcribe.py")
+    // Auto-download to ~/.auxloclaw/scripts/transcribe.py
+    let deploy_path = candidates[0].clone();
+    tracing::info!("transcribe.py not found locally, downloading from GitHub...");
+    if let Some(parent) = deploy_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let url = "https://raw.githubusercontent.com/Auxlo-xyz/auxloclaw/master/scripts/transcribe.py";
+    let download = std::process::Command::new("curl")
+        .args(["-fsSL", url, "-o", deploy_path.to_str().unwrap_or("")])
+        .output();
+    match download {
+        Ok(o) if o.status.success() => {
+            tracing::info!("Downloaded transcribe.py to {}", deploy_path.display());
+            // Make executable
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&deploy_path, std::fs::Permissions::from_mode(0o755));
+            }
+            deploy_path
+        }
+        _ => {
+            tracing::warn!("Failed to download transcribe.py from GitHub");
+            deploy_path // return the path anyway so the error message is clear
+        }
+    }
 }
 
 /// Audio file extensions we can transcribe.
