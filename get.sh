@@ -156,6 +156,30 @@ with sync_playwright() as p:
         fi
     fi
 
+    # Pre-download Whisper base model (~150MB) so first transcription is instant
+    if python3 -c "import faster_whisper" 2>/dev/null; then
+        if ! python3 -c "
+from faster_whisper import WhisperModel
+import os, glob
+cache = os.path.expanduser('~/.cache/huggingface/hub')
+if os.path.isdir(cache):
+    matches = glob.glob(os.path.join(cache, '*whisper*base*'))
+    if matches:
+        raise SystemExit(0)
+raise SystemExit(1)
+" 2>/dev/null; then
+            local avail_kb
+            avail_kb=$(df -k "${HOME:-/root}" 2>/dev/null | awk 'NR==2{print $4}')
+            if [ "${avail_kb:-0}" -lt 204800 ]; then
+                echo "Warning: Less than 200MB free -- skipping Whisper model pre-download"
+                echo "  Model will auto-download on first transcription attempt"
+            else
+                echo "Pre-downloading Whisper base model (~150MB)..."
+                python3 -c "from faster_whisper import WhisperModel; WhisperModel('base', device='cpu', compute_type='int8')" 2>&1 | tail -3                     || echo "Warning: Whisper model download failed (will retry on first use)"
+            fi
+        fi
+    fi
+
     # Deploy transcribe helper script
     local TRANSCRIBE_SCRIPT="${HELPER_DIR}/transcribe.py"
     if [ ! -f "$TRANSCRIBE_SCRIPT" ]; then
