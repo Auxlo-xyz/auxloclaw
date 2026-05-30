@@ -90,7 +90,8 @@ impl EventHandler for DiscordHandler {
 
                 // Check for /code command
                 if content_clone.trim().starts_with("/code") {
-                    let session_id = format!("discord-code-{}", user_id);
+                    let uid = format!("{}", user_id);
+                    let session_id = agent.get_or_create_session_id("discord-code", &uid);
                     let workspace = crate::commands::code::ensure_workspace(&session_id)
                         .unwrap_or_else(|e| {
                             tracing::warn!("Failed to create workspace: {}", e);
@@ -99,7 +100,7 @@ impl EventHandler for DiscordHandler {
                     let _ = crate::commands::code::init_workspace(&workspace);
                     let code_prompt = crate::commands::code::build_code_system_prompt(&workspace);
                     agent.set_session_context("discord", &format!("{}", msg.author.id.get())).await;
-                    agent.set_system_prompt_override(&format!("dc-code-{}", msg.author.id.get()), code_prompt).await;
+                    agent.set_system_prompt_override(&session_id, code_prompt).await;
                     let response = format!(
                         "Coding mode activated.\nWorkspace: {}\n\nSend your coding task as the next message. Use /normal to exit coding mode.",
                         workspace.display()
@@ -112,7 +113,10 @@ impl EventHandler for DiscordHandler {
 
                 // Check for /normal to exit code mode
                 if content_clone.trim() == "/normal" {
-                    agent.clear_system_prompt_override(&format!("dc-code-{}", msg.author.id.get())).await;
+                    let uid = format!("{}", user_id);
+                    let code_session = agent.get_or_create_session_id("discord-code", &uid);
+                    agent.clear_system_prompt_override(&code_session).await;
+                    agent.reset_session_routing("discord-code", &uid);
                     if let Err(e) = msg_channel.say(&http, "Exited coding mode. Back to normal.").await {
                         error!("Failed to send Discord message: {}", e);
                     }
@@ -171,11 +175,12 @@ impl EventHandler for DiscordHandler {
                 }
 
                 // Route through code session if in code mode
-                let is_coding = code_mode.get_override(&format!("dc-code-{}", user_id.get())).is_some();
+                let uid = format!("{}", user_id);
+                let is_coding = agent.has_active_session("discord-code", &uid);
                 let session_id = if is_coding {
-                    Some(format!("discord-code-{}", user_id))
+                    Some(agent.get_or_create_session_id("discord-code", &uid))
                 } else {
-                    Some(user_id.to_string())
+                    Some(agent.get_or_create_session_id("discord", &uid))
                 };
                 let _typing = msg_channel.start_typing(&http);
                 agent.set_session_context("discord", &format!("{}", msg.author.id.get())).await;

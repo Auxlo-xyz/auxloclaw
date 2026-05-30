@@ -116,6 +116,15 @@ CREATE TABLE IF NOT EXISTS compaction_summaries (
     FOREIGN KEY (session_id) REFERENCES sessions(session_id)
 );
 
+-- Active session routing (channel+user -> current session)
+CREATE TABLE IF NOT EXISTS session_routing (
+    channel TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (channel, user_id)
+);
+
 -- FTS5 virtual tables for search
 CREATE VIRTUAL TABLE IF NOT EXISTS reflections_fts USING fts5(
     title, narrative, user_goal, completed,
@@ -984,6 +993,80 @@ impl MemoryStore {
         }
         let count = self.message_count(&session.session_id)?;
         self.update_session(&session.session_id, count)?;
+        Ok(())
+    }
+
+    // ── Session activity queries (for bootstrapping in-memory state) ────
+
+    pub fn get_all_session_updated_at(&self) -> Result<std::collections::HashMap<String, u64>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT session_id, updated_at FROM sessions")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
+        })?;
+        let mut map = std::collections::HashMap::new();
+        for r in rows {
+            let (k, v) = r?;
+            map.insert(k, v);
+        }
+        Ok(map)
+    }
+
+    pub fn get_latest_reflection_per_session(&self) -> Result<std::collections::HashMap<String, u64>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT session_id, MAX(created_at) FROM reflections GROUP BY session_id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
+        })?;
+        let mut map = std::collections::HashMap::new();
+        for r in rows {
+            let (k, v) = r?;
+            map.insert(k, v);
+        }
+        Ok(map)
+    }
+
+    pub fn delete_messages_for_session(&self, session_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM messages WHERE session_id = ?1", params![session_id])?;
+        Ok(())
+    }
+
+    // ── Session routing (channel+user -> active session) ─────────────────
+
+    pub fn get_active_session_id(&self, channel: &str, user_id: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT session_id FROM session_routing WHERE channel = ?1 AND user_id = ?2",
+        )?;
+        let mut rows = stmt.query_map(params![channel, user_id], |row| {
+            Ok(row.get::<_, String>(0)?)
+        })?;
+        match rows.next() {
+            Some(r) => Ok(Some(r?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn set_active_session(&self, channel: &str, user_id: &str, session_id: &str) -> Result<()> {
+        let now = now_secs();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO session_routing (channel, user_id, session_id, updated_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![channel, user_id, session_id, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_active_session(&self, channel: &str, user_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM session_routing WHERE channel = ?1 AND user_id = ?2",
+            params![channel, user_id],
+        )?;
         Ok(())
     }
 }

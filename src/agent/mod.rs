@@ -209,7 +209,9 @@ impl AgentCore {
         let reflector = {
             let r = Reflector::new(reflector_config, data_dir.clone());
             if let Some(ref ms) = memory_store {
-                Arc::new(r.with_store(ms.clone()))
+                let r = r.with_store(ms.clone());
+                r.restore_cooldowns();
+                Arc::new(r)
             } else {
                 Arc::new(r)
             }
@@ -275,14 +277,88 @@ impl AgentCore {
         }
     }
 
+    /// Check if there's an active session routing for (channel, user_id).
+    /// Used by channels to detect code mode without constructing the key.
+    pub fn has_active_session(&self, channel: &str, user_id: &str) -> bool {
+        if let Some(ref ms) = self.memory_store {
+            return ms.get_active_session_id(channel, user_id)
+                .ok()
+                .flatten()
+                .is_some();
+        }
+        false
+    }
+
+    /// Check if there's an active session routing for (channel, user_id).
+    /// Used by channels to detect code mode without constructing the key.
     pub async fn load_sessions(&self) -> Result<()> {
         let persisted = self.session_store.load_all()?;
         let mut sessions = self.sessions.write().await;
+        let mut last_activity = self.last_activity.write().await;
         for (key, history) in persisted {
+            // Bootstrap last_activity from the session's persisted updated_at
+            // so reflection doesn't fire on every session immediately after restart.
+            last_activity.insert(key.clone(), history.updated_at);
             sessions.insert(key, history);
         }
-        tracing::info!(" Loaded {} sessions from disk", sessions.len());
+        tracing::info!(
+            " Loaded {} sessions from disk (last_activity bootstrapped for all)",
+            sessions.len()
+        );
         Ok(())
+    }
+
+    /// Get the active session ID for a (channel, user_id) pair, or create a new
+    /// UUID-based session.  Session keys use the format `{channel}:{user_id}:{uuid}`.
+    ///
+    /// Routing is persisted in the `session_routing` SQLite table so it survives
+    /// restarts.  A new UUID is generated only when no active session exists for
+    /// the pair.
+    pub fn get_or_create_session_id(&self, channel: &str, user_id: &str) -> String {
+        // Check if there's already an active session routed for this pair
+        if let Some(ref ms) = self.memory_store {
+            match ms.get_active_session_id(channel, user_id) {
+                Ok(Some(session_id)) => return session_id,
+                Ok(None) => {} // fall through to create
+                Err(e) => {
+                    tracing::warn!("Failed to look up active session: {}", e);
+                }
+            }
+        }
+
+        // Generate a new UUID-based session key
+        let uuid = uuid::Uuid::new_v4().to_string();
+        let short_uuid = &uuid[..8]; // first 8 hex chars for readability
+        let session_id = format!("{}:{}:{}", channel, user_id, short_uuid);
+
+        // Persist the routing
+        if let Some(ref ms) = self.memory_store {
+            if let Err(e) = ms.set_active_session(channel, user_id, &session_id) {
+                tracing::warn!("Failed to set active session routing: {}", e);
+            }
+        }
+
+        session_id
+    }
+
+    /// Reset the session routing for a (channel, user_id) pair so the next
+    /// message creates a fresh session.  Used by /new and /clear commands.
+    pub fn reset_session_routing(&self, channel: &str, user_id: &str) {
+        if let Some(ref ms) = self.memory_store {
+            match ms.get_active_session_id(channel, user_id) {
+                Ok(Some(old_id)) => {
+                    tracing::info!(
+                        "Resetting session routing for {}:{} (was: {})",
+                        channel, user_id, old_id
+                    );
+                }
+                _ => {}
+            }
+            // Remove the routing so get_or_create generates a new UUID
+            if let Err(e) = ms.clear_active_session(channel, user_id) {
+                tracing::warn!("Failed to clear session routing: {}", e);
+            }
+        }
     }
 
     /// Migrate existing JSON session files to SQLite store.

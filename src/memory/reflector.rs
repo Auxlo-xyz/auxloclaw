@@ -3,7 +3,6 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::Arc;
@@ -91,7 +90,6 @@ impl Default for ReflectorConfig {
 /// Reflector - produces structured session analysis
 pub struct Reflector {
     config: ReflectorConfig,
-    reflections_dir: PathBuf,
     last_reflection: std::sync::RwLock<HashMap<String, u64>>,
     store: Option<Arc<MemoryStore>>,
 }
@@ -99,22 +97,39 @@ pub struct Reflector {
 use std::collections::HashMap;
 
 impl Reflector {
-    pub fn new(config: ReflectorConfig, data_dir: PathBuf) -> Self {
-        let reflections_dir = data_dir.join("reflections");
-        let _ = fs::create_dir_all(&reflections_dir);
-
+    pub fn new(config: ReflectorConfig, _data_dir: PathBuf) -> Self {
         Self {
             config,
-            reflections_dir,
             last_reflection: std::sync::RwLock::new(HashMap::new()),
             store: None,
         }
     }
 
-    /// Attach a SQLite store for dual-writing reflections
+    /// Attach a SQLite store for reading/writing reflections
     pub fn with_store(mut self, store: Arc<MemoryStore>) -> Self {
         self.store = Some(store);
         self
+    }
+
+    /// Restore `last_reflection` timestamps from SQLite so cooldowns survive restarts.
+    /// Call once at startup after the store is attached.
+    pub fn restore_cooldowns(&self) {
+        if let Some(ref store) = self.store {
+            match store.get_latest_reflection_per_session() {
+                Ok(map) => {
+                    let mut lr = self.last_reflection.write().unwrap();
+                    let count = map.len();
+                    *lr = map;
+                    tracing::info!(
+                        "Restored {} reflection cooldown timestamps from SQLite",
+                        count
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to restore reflection cooldowns: {}", e);
+                }
+            }
+        }
     }
 
     /// Check if reflection should run for a session
@@ -539,86 +554,32 @@ Conversation:
             .unwrap_or_default()
     }
 
-    /// Save reflection to disk (JSON backup + SQLite)
+    /// Save reflection to SQLite (single source of truth)
     fn save_reflection(&self, reflection: &Reflection) -> Result<()> {
-        // JSON backup
-        let filename = format!(
-            "{}_{}.json",
-            reflection.session_id.replace(['/', '\\', ':'], "_"),
-            reflection.created_at
-        );
-        let path = self.reflections_dir.join(filename);
-        let json = serde_json::to_string_pretty(reflection)?;
-        fs::write(&path, json)
-            .with_context(|| format!("Failed to write reflection file: {:?}", path))?;
-
-        // SQLite insert
         if let Some(ref store) = self.store {
-            if let Err(e) = store.insert_reflection(reflection) {
-                tracing::warn!("Failed to insert reflection into SQLite: {}", e);
-            }
+            store.insert_reflection(reflection)
+                .context("Failed to insert reflection into SQLite")?;
+        } else {
+            tracing::warn!("No SQLite store attached — reflection not persisted");
         }
-
         Ok(())
     }
 
-    /// Load all reflections for a session
+    /// Load all reflections for a session from SQLite
     pub fn load_reflections(&self, session_id: &str) -> Result<Vec<Reflection>> {
-        let mut reflections = Vec::new();
-
-        if !self.reflections_dir.exists() {
-            return Ok(reflections);
+        if let Some(ref store) = self.store {
+            store.get_reflections(Some(session_id), 50)
+        } else {
+            Ok(Vec::new())
         }
-
-        let safe_id = session_id.replace(['/', '\\', ':'], "_");
-
-        for entry in fs::read_dir(&self.reflections_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path
-                .file_name()
-                .map(|n| n.to_string_lossy().starts_with(&safe_id))
-                .unwrap_or(false)
-            {
-                if let Ok(json) = fs::read_to_string(&path) {
-                    if let Ok(reflection) = serde_json::from_str::<Reflection>(&json) {
-                        reflections.push(reflection);
-                    }
-                }
-            }
-        }
-
-        // Sort by created_at descending
-        reflections.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-
-        Ok(reflections)
     }
 
-    /// Load all reflections across all sessions
+    /// Load all reflections across all sessions from SQLite
     pub fn load_all_reflections(&self) -> Result<Vec<Reflection>> {
-        let mut reflections = Vec::new();
-
-        if !self.reflections_dir.exists() {
-            return Ok(reflections);
+        if let Some(ref store) = self.store {
+            store.get_reflections(None, 1000)
+        } else {
+            Ok(Vec::new())
         }
-
-        for entry in fs::read_dir(&self.reflections_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path.extension().map(|e| e == "json").unwrap_or(false) {
-                if let Ok(json) = fs::read_to_string(&path) {
-                    if let Ok(reflection) = serde_json::from_str::<Reflection>(&json) {
-                        reflections.push(reflection);
-                    }
-                }
-            }
-        }
-
-        // Sort by created_at descending
-        reflections.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-
-        Ok(reflections)
     }
 }

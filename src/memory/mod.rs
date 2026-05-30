@@ -150,104 +150,93 @@ impl SessionHistory {
     }
 }
 
-/// Persistent session store using JSON files
+/// SQLite-backed session store — replaces JSON file persistence.
+/// Wraps a `MemoryStore` and delegates all reads/writes to SQLite.
 pub struct SessionStore {
-    data_dir: PathBuf,
+    store: Arc<MemoryStore>,
 }
 
 impl SessionStore {
+    /// Create from an existing MemoryStore (preferred — shares the same connection).
+    pub fn new_from_store(store: Arc<MemoryStore>) -> Result<Self> {
+        Ok(Self { store })
+    }
+
+    /// Convenience constructor: opens its own MemoryStore at `db_path`.
+    /// Use `new_from_store` when a MemoryStore already exists to avoid
+    /// duplicate connections.
     pub fn new(db_path: &str) -> Result<Self> {
-        let data_dir = PathBuf::from(db_path)
-            .parent()
-            .map(|p| p.join("sessions"))
-            .unwrap_or_else(|| PathBuf::from("sessions"));
-        
-        fs::create_dir_all(&data_dir)
-            .with_context(|| format!("Failed to create session directory: {:?}", data_dir))?;
-        
-        Ok(Self { data_dir })
+        let path = std::path::Path::new(db_path);
+        let store = MemoryStore::new(path)
+            .with_context(|| format!("Failed to open SQLite session store at {}", db_path))?;
+        Ok(Self { store: Arc::new(store) })
     }
-    
-    fn session_path(&self, session_id: &str) -> PathBuf {
-        // Sanitize session_id for filesystem
-        let safe_id = session_id.replace(['/', '\\', ':'], "_");
-        self.data_dir.join(format!("{}.json", safe_id))
+
+    /// Access the underlying MemoryStore (for reflection/activity queries).
+    pub fn memory_store(&self) -> &Arc<MemoryStore> {
+        &self.store
     }
-    
-    /// Save a session to disk
+
+    /// Save a session: upsert the session record, then replace all messages.
+    /// This is correct because the in-memory `SessionHistory` is the source
+    /// of truth during runtime; SQLite is the persistence layer.
     pub fn save(&self, session_id: &str, history: &SessionHistory) -> Result<()> {
-        let path = self.session_path(session_id);
-        let json = serde_json::to_string_pretty(history)?;
-        fs::write(&path, json)
-            .with_context(|| format!("Failed to write session file: {:?}", path))?;
+        // Upsert session record
+        self.store.create_session(session_id, "cli", None)?;
+        // Replace messages (delete + re-insert)
+        self.store.delete_messages_for_session(session_id)?;
+        for msg in &history.messages {
+            self.store.insert_message(session_id, msg)?;
+        }
+        self.store.update_session(session_id, history.messages.len())?;
         Ok(())
     }
-    
-    /// Load a session from disk
+
+    /// Load a single session from SQLite.
     pub fn load(&self, session_id: &str) -> Result<Option<SessionHistory>> {
-        let path = self.session_path(session_id);
-        if !path.exists() {
-            return Ok(None);
-        }
-        
-        let json = fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read session file: {:?}", path))?;
-        let history: SessionHistory = serde_json::from_str(&json)?;
-        Ok(Some(history))
+        let record = match self.store.get_session(session_id)? {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+        let messages = self.store.get_messages(session_id, None)?;
+        Ok(Some(SessionHistory {
+            session_id: record.session_id,
+            messages,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
+        }))
     }
-    
-    /// Load all sessions from disk
+
+    /// Load all sessions from SQLite.
     pub fn load_all(&self) -> Result<Vec<(String, SessionHistory)>> {
+        let records = self.store.list_sessions(500)?;
         let mut result = Vec::new();
-        
-        if !self.data_dir.exists() {
-            return Ok(result);
+        for record in records {
+            let messages = self.store.get_messages(&record.session_id, None)?;
+            result.push((
+                record.session_id.clone(),
+                SessionHistory {
+                    session_id: record.session_id,
+                    messages,
+                    created_at: record.created_at,
+                    updated_at: record.updated_at,
+                },
+            ));
         }
-        
-        for entry in fs::read_dir(&self.data_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            
-            if path.extension().map(|e| e == "json").unwrap_or(false) {
-                if let Ok(json) = fs::read_to_string(&path) {
-                    if let Ok(history) = serde_json::from_str::<SessionHistory>(&json) {
-                        result.push((history.session_id.clone(), history));
-                    }
-                }
-            }
-        }
-        
-        // Sort by updated_at descending
         result.sort_by(|a, b| b.1.updated_at.cmp(&a.1.updated_at));
-        
         Ok(result)
     }
-    
-    /// Delete a session from disk
+
+    /// Delete a session (and its cascaded messages) from SQLite.
     pub fn delete(&self, session_id: &str) -> Result<()> {
-        let path = self.session_path(session_id);
-        if path.exists() {
-            fs::remove_file(&path)
-                .with_context(|| format!("Failed to delete session file: {:?}", path))?;
-        }
+        self.store.delete_messages_for_session(session_id)?;
+        self.store.delete_session(session_id)?;
         Ok(())
     }
-    
-    /// Get session count
+
+    /// Count all sessions in SQLite.
     pub fn count(&self) -> Result<usize> {
-        if !self.data_dir.exists() {
-            return Ok(0);
-        }
-        
-        let count = fs::read_dir(&self.data_dir)?
-            .filter(|e| {
-                e.as_ref().ok()
-                    .and_then(|e| e.path().extension().map(|e| e == "json"))
-                    .unwrap_or(false)
-            })
-            .count();
-        
-        Ok(count)
+        self.store.session_count()
     }
 }
 

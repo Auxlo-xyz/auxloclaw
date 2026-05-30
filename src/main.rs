@@ -328,12 +328,7 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
         info!("{} Registered {} MCP tools", "", count);
     }
 
-    // Initialize persistent session store
-    let session_store = Arc::new(memory::SessionStore::new(&session_db)?);
-    let code_mode = Arc::new(memory::CodeModeStore::new(&session_db)?);
-    let checkpoint_manager = Arc::new(CheckpointManager::new(&session_db)?);
-
-    // Initialize SQLite memory store
+    // Initialize SQLite memory store first (shared by session store + reflector)
     let db_path = std::path::Path::new(&session_db);
     let memory_store = match memory::MemoryStore::new(db_path) {
         Ok(store) => {
@@ -341,10 +336,18 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
             Some(Arc::new(store))
         }
         Err(e) => {
-            tracing::warn!("Failed to init SQLite memory store, falling back to JSON: {}", e);
+            tracing::warn!("Failed to init SQLite memory store: {}", e);
             None
         }
     };
+
+    // Initialize persistent session store backed by SQLite
+    let session_store = match &memory_store {
+        Some(ms) => Arc::new(memory::SessionStore::new_from_store(ms.clone())?),
+        None => Arc::new(memory::SessionStore::new(&session_db)?),
+    };
+    let code_mode = Arc::new(memory::CodeModeStore::new(&session_db)?);
+    let checkpoint_manager = Arc::new(CheckpointManager::new(&session_db)?);
 
     plugins.run_lifecycle(plugins::HookEvent::Startup).await;
 
@@ -382,7 +385,7 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
         }
     }
 
-    // Load persisted sessions
+    // Load persisted sessions (also bootstraps last_activity from SQLite updated_at)
     agent.load_sessions().await?;
     
     // Now initialize the sub-agent coordinator with all dependencies

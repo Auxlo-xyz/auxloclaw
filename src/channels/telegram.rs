@@ -184,8 +184,8 @@ impl TelegramState {
     }
 
     async fn is_coding(&self, chat_id: i64) -> bool {
-        let session_key = format!("tg-code-{}", chat_id);
-        self.code_mode.get_override(&session_key).is_some()
+        let user_id = format!("{}", chat_id);
+        self.agent.has_active_session("telegram-code", &user_id)
     }
 
     async fn enter_code_mode(&self, _chat_id: i64, _workspace: String) {
@@ -349,8 +349,10 @@ async fn handle_command(
             state.agent.handle_memory_text(text).await
         }
         Command::Clear => {
-            let session_id = format!("tg:{}", chat_id);
+            let user_id = format!("{}", chat_id);
+            let session_id = state.agent.get_or_create_session_id("telegram", &user_id);
             state.agent.clear_session(&session_id).await;
+            state.agent.reset_session_routing("telegram", &user_id);
             state.sessions.write().await.remove(&chat_id);
             "Session cleared".to_string()
         }
@@ -376,9 +378,11 @@ async fn handle_command(
             )
         }
         Command::Recover => {
+            let user_id = format!("{}", chat_id);
+            let session_id = state.agent.get_or_create_session_id("telegram", &user_id);
             let _ = state
                 .agent
-                .recover_session(&format!("tg:{}", chat_id))
+                .recover_session(&session_id)
                 .await;
             "Session recovered".to_string()
         }
@@ -411,7 +415,8 @@ async fn handle_command(
         Command::Update => crate::commands::update::handle_update().await,
         Command::Code => {
             // Enter code mode: set override on shared agent and track this chat
-            let session_id = format!("tg-code-{}", chat_id);
+            let user_id = format!("{}", chat_id);
+            let session_id = state.agent.get_or_create_session_id("telegram-code", &user_id);
             let workspace = crate::commands::code::ensure_workspace(&session_id)
                 .unwrap_or_else(|e| {
                     tracing::warn!("Failed to create workspace: {}", e);
@@ -419,8 +424,8 @@ async fn handle_command(
                 });
             let _ = crate::commands::code::init_workspace(&workspace);
             let code_prompt = crate::commands::code::build_code_system_prompt(&workspace);
-            state.agent.set_session_context("telegram", &format!("{}", chat_id)).await;
-            state.agent.set_system_prompt_override(&format!("tg-code-{}", chat_id), code_prompt).await;
+            state.agent.set_session_context("telegram", &user_id).await;
+            state.agent.set_system_prompt_override(&session_id, code_prompt).await;
             state.enter_code_mode(chat_id, workspace.display().to_string()).await;
             format!(
                 "Coding mode activated.\nWorkspace: {}\n\nSend your coding task as the next message. Use /normal to exit coding mode.",
@@ -505,12 +510,17 @@ async fn handle_command(
             return Ok(());
         }
         Command::Normal => {
-            state.agent.clear_system_prompt_override(&format!("tg-code-{}", chat_id)).await;
+            let user_id = format!("{}", chat_id);
+            let code_session = state.agent.get_or_create_session_id("telegram-code", &user_id);
+            state.agent.clear_system_prompt_override(&code_session).await;
+            state.agent.reset_session_routing("telegram-code", &user_id);
             "Exited coding mode. Back to normal.".to_string()
         }
         Command::New => {
-            let session_id = format!("tg:{}", chat_id);
+            let user_id = format!("{}", chat_id);
+            let session_id = state.agent.get_or_create_session_id("telegram", &user_id);
             state.agent.clear_session(&session_id).await;
+            state.agent.reset_session_routing("telegram", &user_id);
             state.clear_session(chat_id).await;
             "New session started".to_string()
         }
@@ -757,7 +767,10 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
 
     if text.trim() == "/normal" {
         state.exit_code_mode(chat_id).await;
-        state.agent.clear_system_prompt_override(&format!("tg:{}", chat_id)).await;
+        let user_id = format!("{}", chat_id);
+        let code_session = state.agent.get_or_create_session_id("telegram-code", &user_id);
+        state.agent.clear_system_prompt_override(&code_session).await;
+        state.agent.reset_session_routing("telegram-code", &user_id);
         send_markdown_message(&bot, chat_id, "Exited coding mode. Back to normal.").await?;
         return Ok(());
     }
@@ -886,12 +899,13 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
 
     let _typing_guard = spawn_typing_loop(&bot, chat_id);
     let _session = state.get_or_create_session(chat_id).await;
+    let user_id = format!("{}", chat_id);
     let session_id = if state.is_coding(chat_id).await {
-        format!("tg-code-{}", chat_id)
+        state.agent.get_or_create_session_id("telegram-code", &user_id)
     } else {
-        format!("tg:{}", chat_id)
+        state.agent.get_or_create_session_id("telegram", &user_id)
     };
-    state.agent.set_session_context("telegram", &format!("{}", chat_id)).await;
+    state.agent.set_session_context("telegram", &user_id).await;
     let response = state
         .agent
         .process(&agent_message, Some(&session_id))

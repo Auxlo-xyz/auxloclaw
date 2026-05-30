@@ -303,7 +303,14 @@ pub async fn handle_code(
     // Register coding workspace tools (read_file, edit_file, run_bash_command, etc.)
     orchestrator.register_code_tools();
     let session_db = shellexpand::tilde(&config.memory.database_path).into_owned();
-    let session_store = Arc::new(crate::memory::SessionStore::new(&session_db)?);
+    let db_path = std::path::Path::new(&session_db);
+    let memory_store = crate::memory::MemoryStore::new(db_path)
+        .ok()
+        .map(|s| Arc::new(s));
+    let session_store = match &memory_store {
+        Some(ms) => Arc::new(crate::memory::SessionStore::new_from_store(ms.clone())?),
+        None => Arc::new(crate::memory::SessionStore::new(&session_db)?),
+    };
     let data_dir = std::path::Path::new(&session_db).parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| std::path::PathBuf::from("~/.auxloclaw"));
@@ -327,7 +334,7 @@ pub async fn handle_code(
         checkpoint_manager,
         Arc::new(parking_lot::RwLock::new((None, None))),
         None,
-        None,
+        memory_store,
     )?);
     // Override the system prompt with the pure coding agent prompt - no persona bleeding
     let coding_prompt = build_code_system_prompt(&workspace);
