@@ -412,6 +412,8 @@ Conversation:
                         serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
                         serde_json::Value::Number(n) => Some(n.to_string()),
                         serde_json::Value::Bool(b) => Some(b.to_string()),
+                        serde_json::Value::Object(_) => serde_json::to_string(v).ok(),
+                        serde_json::Value::Array(_) => serde_json::to_string(v).ok(),
                         _ => None,
                     }
                 }).collect();
@@ -495,9 +497,6 @@ Conversation:
             if let Some(repaired) = Self::try_repair_json(trimmed) {
                 return Ok(repaired);
             }
-            if let Some(end) = trimmed.rfind('}') {
-                return Ok(trimmed[..=end].to_string());
-            }
         }
 
         // Try to extract from markdown code block
@@ -520,9 +519,6 @@ Conversation:
             }
             if let Some(repaired) = Self::try_repair_json(rest) {
                 return Ok(repaired);
-            }
-            if let Some(end) = rest.rfind('}') {
-                return Ok(rest[..=end].to_string());
             }
         }
 
