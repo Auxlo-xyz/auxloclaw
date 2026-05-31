@@ -7,8 +7,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use crate::memory::SessionStore;
 
-use crate::memory::{SessionHistory, SessionStore};
+use crate::memory::SessionHistory;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Checkpoint {

@@ -5,7 +5,6 @@ use crate::providers::Message;
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
-use shellexpand;
 
 const DEFAULT_RECENT_TURNS: usize = 10;
 const MAX_SUMMARY_CHARS: usize = 1_200;

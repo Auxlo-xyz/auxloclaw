@@ -3,7 +3,7 @@
 use crate::checkpoints::CheckpointManager;
 use crate::plugins::PluginManager;
 use anyhow::Result;
-use dialoguer::{theme::ColorfulTheme, History, Input};
+use dialoguer;
 use std::sync::Arc;
 
 pub async fn handle_chat(

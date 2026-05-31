@@ -1,7 +1,6 @@
 use anyhow::Result;
 use clap::Subcommand;
 use crate::memory::store::MemoryStore;
-use std::path::Path;
 
 #[derive(Subcommand)]
 pub enum MemorySubcommand {

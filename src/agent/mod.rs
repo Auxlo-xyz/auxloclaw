@@ -26,7 +26,6 @@ use crate::providers::{CompletionRequest, Message, ProviderPool, ToolCall};
 use crate::skills::{ExtractorConfig, SkillExtractor, ToolTraceEntry};
 use regex::Regex;
 use tokio::sync::mpsc;
-use dirs;
 
 /// Usage statistics
 #[derive(Debug, Clone, Default)]
@@ -874,7 +873,7 @@ impl AgentCore {
         CapabilityManifest::new(&self.config, Some(&self.orchestrator))
     }
 
-    async fn build_system_prompt(&self, session_key: &str) -> String {
+    async fn build_system_prompt(&self, _session_key: &str) -> String {
         use crate::persona::SystemPromptBuilder;
 
         let tools = self.orchestrator.get_definitions();

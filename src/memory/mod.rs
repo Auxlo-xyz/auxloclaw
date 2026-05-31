@@ -18,9 +18,9 @@ pub mod model_store;
 pub mod reflector;
 pub mod store;
 
-pub use compactor::{Compactor, CompactionResult, CompactionSummary};
-pub use reflector::{Reflector, Reflection, ReflectionType, ReflectorConfig};
-pub use store::{MemoryStore, SessionRecord, FactRecord, UserPreference, Observation, CompactionSummaryRecord};
+pub use compactor::{Compactor, CompactionResult};
+pub use reflector::{Reflector, Reflection, ReflectorConfig};
+pub use store::MemoryStore;
 
 /// Memory entry
 #[derive(Debug, Clone, Serialize, Deserialize)]

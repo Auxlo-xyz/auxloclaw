@@ -7,7 +7,7 @@
 //!
 //! Technical context (tools, skills) is injected automatically.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;

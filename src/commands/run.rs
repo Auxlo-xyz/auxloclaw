@@ -1,6 +1,6 @@
 //! Run command handler - execute a skill
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use std::fs;
 
 pub async fn handle_run(skill: String, args: Vec<String>) -> Result<()> {

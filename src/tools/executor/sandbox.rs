@@ -6,7 +6,7 @@
 
 use anyhow::{anyhow, Result};
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Dangerous patterns that are always blocked
 const BLOCKED_PATTERNS: &[&str] = &[

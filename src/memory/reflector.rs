@@ -8,7 +8,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::Arc;
 
 use super::{HistoryMessage, SessionHistory};
-use crate::config::MemoryConfig;
 use super::store::MemoryStore;
 
 /// Reflection type classification

@@ -1,6 +1,5 @@
 //! Logs command - view gateway logs across all channels
 
-use anyhow::Result;
 use std::path::PathBuf;
 
 const DEFAULT_LOG_DIR: &str = "~/.auxloclaw/logs";

@@ -1,11 +1,11 @@
 //! Discord channel adapter
 use anyhow::Result;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use serenity::async_trait;
 use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
 use serenity::prelude::*;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 use tracing::{error, info};
 
 pub struct DiscordHandler {

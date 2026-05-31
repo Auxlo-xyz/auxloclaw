@@ -11,7 +11,6 @@
 //! Security: Messages containing tokens are auto-deleted from Telegram chats.
 
 use anyhow::{anyhow, Context, Result};
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 

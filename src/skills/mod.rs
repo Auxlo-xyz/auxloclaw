@@ -10,10 +10,8 @@
 //! - External skill directories
 
 use anyhow::{bail, Result};
-use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use parking_lot::RwLock;

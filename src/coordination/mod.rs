@@ -8,7 +8,7 @@ pub mod task_delegation;
 
 pub use blackboard::SharedBlackboard;
 pub use sub_agent::{SubAgent, SubAgentConfig, SubAgentResult};
-pub use task_delegation::{TaskDelegator, DelegatedTask, TaskPriority};
+pub use task_delegation::TaskDelegator;
 
 use anyhow::Result;
 use std::sync::Arc;
@@ -19,9 +19,9 @@ use crate::config::AppConfig;
 use crate::providers::ProviderPool;
 use crate::orchestrator::ToolOrchestrator;
 use crate::memory::SessionStore;
-use crate::error_recovery::{AgentError, RecoveryAction};
+use crate::error_recovery::AgentError;
 
-pub use cost_aware_delegation::{TokenBudget, CostAwareDelegator, ComplexityAnalyzer, TaskComplexity, DelegationDecision, DelegationStats};
+pub use cost_aware_delegation::{TokenBudget, CostAwareDelegator, DelegationStats};
 
 /// Main agent coordinator
 pub struct AgentCoordinator {

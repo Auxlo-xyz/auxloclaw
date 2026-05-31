@@ -10,11 +10,9 @@ use crate::config::{ScheduleJobConfig, SchedulerConfig};
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::fs;
-use shellexpand;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

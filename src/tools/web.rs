@@ -2,9 +2,7 @@
 
 use async_trait::async_trait;
 use anyhow::{anyhow, Result};
-use serde::{Deserialize, Serialize};
-use std::process::{Command, Stdio};
-use regex::Regex;
+use std::process::Command;
 
 use crate::orchestrator::{Tool, ToolResult};
 
