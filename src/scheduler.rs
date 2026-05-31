@@ -15,6 +15,7 @@ use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::fs;
 use shellexpand;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduleRunEntry {
@@ -81,6 +82,7 @@ fn now_epoch() -> u64 {
 
 pub struct CronScheduler {
     scheduler: JobScheduler,
+    job_id_map: HashMap<String, Uuid>,
 }
 
 impl CronScheduler {
@@ -93,6 +95,7 @@ impl CronScheduler {
             .await
             .context("failed to create cron scheduler")?;
 
+        let mut job_id_map = HashMap::new();
         let mut registered = 0usize;
         for job_config in config.jobs.into_iter().filter(|job| job.enabled) {
             validate_job(&job_config)?;
@@ -117,10 +120,12 @@ impl CronScheduler {
             })
             .with_context(|| format!("invalid cron expression for job {}", job_config.name))?;
 
-            scheduler
+            let job_name = job_config.name.clone();
+            let uuid = scheduler
                 .add(job)
                 .await
                 .with_context(|| format!("failed to add cron job {}", job_config.name))?;
+            job_id_map.insert(job_name, uuid);
 
             if run_on_startup {
                 let startup_agent = agent.clone();
@@ -153,7 +158,82 @@ impl CronScheduler {
             .await
             .context("failed to start cron scheduler")?;
         tracing::info!("⏰ Started cron scheduler with {} jobs", registered);
-        Ok(Some(Self { scheduler }))
+        Ok(Some(Self { scheduler, job_id_map }))
+    }
+
+    pub async fn add_job(
+        &mut self,
+        agent: Arc<AgentCore>,
+        name: String,
+        cron: String,
+        prompt: String,
+        timeout_secs: u64,
+        session_id: Option<String>,
+        log: ScheduleRunLog,
+    ) -> Result<()> {
+        let job_agent = agent.clone();
+        let job_name = name.clone();
+        let job_prompt = prompt.clone();
+        let job_session_id = session_id.clone();
+        let job_log = log.clone();
+
+        let job = Job::new_async(cron.as_str(), move |_uuid, _lock| {
+            let agent = job_agent.clone();
+            let name = name.clone();
+            let prompt = job_prompt.clone();
+            let session_id = job_session_id.clone();
+            let log = job_log.clone();
+            Box::pin(async move {
+                run_scheduled_job(agent, name, prompt, session_id, timeout_secs, log).await;
+            })
+        })
+        .with_context(|| format!("invalid cron expression for job '{}'", job_name))?;
+
+        let uuid = self.scheduler.add(job).await
+            .map_err(|e| anyhow::anyhow!("failed to add job '{}': {:?}", job_name, e))?;
+
+        self.job_id_map.insert(job_name.clone(), uuid);
+        tracing::info!("Added live cron job '{}' ({})", job_name, uuid);
+        Ok(())
+    }
+
+    pub async fn remove_job(&mut self, name: &str) -> Result<()> {
+        let uuid = self.job_id_map.remove(name)
+            .ok_or_else(|| anyhow::anyhow!("job '{}' not found in live scheduler", name))?;
+
+        self.scheduler.remove(&uuid).await
+            .map_err(|e| anyhow::anyhow!("failed to remove job '{}': {:?}", name, e))?;
+
+        tracing::info!("Removed live cron job '{}'", name);
+        Ok(())
+    }
+
+    pub async fn update_job(
+        &mut self,
+        agent: Arc<AgentCore>,
+        name: String,
+        cron: Option<String>,
+        prompt: Option<String>,
+        timeout_secs: Option<u64>,
+        enabled: Option<bool>,
+        session_id: Option<String>,
+        log: ScheduleRunLog,
+    ) -> Result<()> {
+        self.remove_job(&name).await?;
+
+        let new_enabled = enabled.unwrap_or(true);
+        if !new_enabled {
+            tracing::info!("Disabled live cron job '{}'", name);
+            return Ok(());
+        }
+
+        let new_cron = cron.unwrap_or_else(|| {
+            log.read().ok()
+                .and_then(|g| g.get(&name).map(|e| e.cron.clone()))
+                .unwrap_or_default()
+        });
+
+        self.add_job(agent, name, new_cron, prompt.unwrap_or_default(), timeout_secs.unwrap_or(300), session_id, log).await
     }
 
     pub async fn shutdown(mut self) -> Result<()> {

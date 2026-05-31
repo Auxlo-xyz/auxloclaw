@@ -16,7 +16,7 @@ pub mod transcribe;
 pub use blackboard::{BlackboardTool, OrchestrateTool};
 pub use builtin::*;
 pub use executor::{ExecuteCodeTool, ExecuteParallelTool};
-pub use scheduler_tools::{CreateScheduledJobTool, UpdateScheduledJobTool, DeleteScheduledJobTool, ListScheduledJobsEnhancedTool, SchedulerManager};
+pub use scheduler_tools::{CreateScheduledJobTool, UpdateScheduledJobTool, DeleteScheduledJobTool, ListScheduledJobsEnhancedTool, SchedulerManager, CronHandle};
 pub use send_message::{MessageRouter, SendMessageTool, PlatformAdapter, MessageTarget, TelegramAdapter, DiscordAdapter};
 pub use subagent::DelegateToSubAgentTool;
 pub use structured_output::StructuredOutputTool;

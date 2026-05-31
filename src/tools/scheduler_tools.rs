@@ -1,11 +1,14 @@
 //! Scheduler management tools - create, update, delete scheduled jobs at runtime
 
 use crate::orchestrator::{Tool, ToolResult};
-use crate::scheduler::ScheduleRunLog;
+use crate::scheduler::{CronScheduler, ScheduleRunLog};
 use async_trait::async_trait;
 use serde_json::json;
 use std::path::Path;
 use std::sync::Arc;
+use tokio::sync::Mutex;
+
+pub type CronHandle = Arc<Mutex<Option<CronScheduler>>>;
 
 /// Shared scheduler state that allows runtime job mutation
 /// Wraps the mutable job list and persists changes to config.toml
@@ -13,11 +16,18 @@ use std::sync::Arc;
 pub struct SchedulerManager {
     run_log: ScheduleRunLog,
     config_path: String,
+    agent: Option<Arc<crate::agent::AgentCore>>,
+    cron_handle: Option<CronHandle>,
 }
 
 impl SchedulerManager {
     pub fn new(run_log: ScheduleRunLog, config_path: String) -> Self {
-        Self { run_log, config_path }
+        Self { run_log, config_path, agent: None, cron_handle: None }
+    }
+
+    pub fn set_live_scheduler(&mut self, agent: Arc<crate::agent::AgentCore>, cron_handle: CronHandle) {
+        self.agent = Some(agent);
+        self.cron_handle = Some(cron_handle);
     }
 
     fn load_config(&self) -> anyhow::Result<crate::config::AppConfig> {
@@ -53,7 +63,6 @@ impl SchedulerManager {
         config.scheduler.jobs.push(job);
         self.save_config(&config)?;
 
-        // Update the in-memory run log
         if let Ok(mut guard) = self.run_log.write() {
             guard.insert(name.to_string(), crate::scheduler::ScheduleRunEntry {
                 name: name.to_string(),
@@ -64,6 +73,24 @@ impl SchedulerManager {
                 last_success: false,
                 run_count: 0,
                 enabled: true,
+            });
+        }
+
+        if let (Some(cron_handle), Some(agent)) = (&self.cron_handle, &self.agent) {
+            let handle = cron_handle.clone();
+            let agent = agent.clone();
+            let log = self.run_log.clone();
+            let name = name.to_string();
+            let cron = cron.to_string();
+            let prompt = prompt.to_string();
+            let session_id = session_id.map(|s| s.to_string());
+            tokio::spawn(async move {
+                let mut guard = handle.lock().await;
+                if let Some(ref mut scheduler) = *guard {
+                    if let Err(e) = scheduler.add_job(agent, name, cron, prompt, timeout_secs, session_id, log).await {
+                        tracing::warn!("Failed to register job with live scheduler: {}", e);
+                    }
+                }
             });
         }
 
@@ -84,13 +111,32 @@ impl SchedulerManager {
         let job_clone = job.clone();
         self.save_config(&config)?;
 
-        // Update in-memory run log
         if let Ok(mut guard) = self.run_log.write() {
             if let Some(entry) = guard.get_mut(name) {
-                entry.cron = job_clone.cron;
+                entry.cron = job_clone.cron.clone();
                 entry.prompt_summary = job_clone.prompt.chars().take(100).collect();
                 entry.enabled = job_clone.enabled;
             }
+        }
+
+        if let (Some(cron_handle), Some(agent)) = (&self.cron_handle, &self.agent) {
+            let handle = cron_handle.clone();
+            let agent = agent.clone();
+            let log = self.run_log.clone();
+            let name_owned = name.to_string();
+            let job = job_clone.clone();
+            tokio::spawn(async move {
+                let mut guard = handle.lock().await;
+                if let Some(ref mut scheduler) = *guard {
+                    if let Err(e) = scheduler.update_job(
+                        agent, name_owned, Some(job.cron), Some(job.prompt),
+                        Some(job.timeout_secs), Some(job.enabled),
+                        job.session_id, log,
+                    ).await {
+                        tracing::warn!("Failed to update live job: {}", e);
+                    }
+                }
+            });
         }
 
         Ok(())
@@ -107,9 +153,21 @@ impl SchedulerManager {
 
         self.save_config(&config)?;
 
-        // Remove from in-memory run log
         if let Ok(mut guard) = self.run_log.write() {
             guard.remove(name);
+        }
+
+        if let Some(cron_handle) = &self.cron_handle {
+            let handle = cron_handle.clone();
+            let name = name.to_string();
+            tokio::spawn(async move {
+                let mut guard = handle.lock().await;
+                if let Some(ref mut scheduler) = *guard {
+                    if let Err(e) = scheduler.remove_job(&name).await {
+                        tracing::warn!("Failed to remove job '{}' from live scheduler: {}", name, e);
+                    }
+                }
+            });
         }
 
         Ok(())
@@ -228,7 +286,7 @@ impl Tool for CreateScheduledJobTool {
                         "status": "created",
                         "name": name,
                         "cron": cron,
-                        "note": "Job saved to config. Will activate on next gateway restart, or use the /schedule reload command."
+                        "note": "Job saved to config and activated immediately."
                     }),
                     error: None,
                     duration_ms: 0,
@@ -343,7 +401,7 @@ impl Tool for DeleteScheduledJobTool {
                 Ok(ToolResult {
                     tool_name: self.name().into(),
                     success: true,
-                    output: json!({"status": "deleted", "name": name, "note": "Job removed. Will stop on next gateway restart."}),
+                    output: json!({"status": "deleted", "name": name, "note": "Job removed from config and stopped immediately."}),
                     error: None,
                     duration_ms: 0,
                 })

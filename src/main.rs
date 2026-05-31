@@ -27,6 +27,7 @@ mod tools;
 use crate::checkpoints::CheckpointManager;
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::sync::Mutex;
 
 use crate::auth::{AuthConfig, AuthState};
 use axum::extract::{Request, State};
@@ -334,8 +335,9 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
 
     // Scheduler manager for runtime CRUD on scheduled jobs
     let config_path_str = config_path.to_string_lossy().to_string();
-    let scheduler_manager = tools::SchedulerManager::new(schedule_log.clone(), config_path_str.clone());
-    raw_orchestrator.register_schedule_management_tools(scheduler_manager.clone());
+    let mut scheduler_manager = tools::SchedulerManager::new(schedule_log.clone(), config_path_str.clone());
+    // CronHandle placeholder -- the live scheduler gets stored here after agent creation
+    let cron_handle: tools::CronHandle = Arc::new(tokio::sync::Mutex::new(None));
 
     // Shared blackboard for multi-agent coordination
     let blackboard = coordination::SharedBlackboard::new();
@@ -410,8 +412,13 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     // Register blackboard tools (requires coordinator to be initialized)
     orchestrator.register_blackboard_tools(blackboard.clone(), coordinator.clone());
 
-    let _cron_scheduler =
+    let cron_scheduler =
         scheduler::CronScheduler::start(agent.clone(), config.scheduler.clone(), schedule_log.clone()).await?;
+    if let Some(cs) = cron_scheduler {
+        *cron_handle.lock().await = Some(cs);
+    }
+    scheduler_manager.set_live_scheduler(agent.clone(), cron_handle.clone());
+    orchestrator.register_schedule_management_tools(scheduler_manager);
 
     info!("⚡ Core initialized in {:?}", start.elapsed());
 
