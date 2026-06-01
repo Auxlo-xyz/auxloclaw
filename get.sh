@@ -202,6 +202,14 @@ raise SystemExit(1)
             || echo "Warning: Failed to download stealth_fetch helper script"
     fi
 
+    # Deploy watchdog script (auto-restarts gateway if it crashes)
+    local WATCHDOG_BIN="/usr/local/bin/auxloclaw_watchdog.sh"
+    echo "Deploying watchdog script..."
+    curl -fsSL "https://raw.githubusercontent.com/Auxlo-xyz/auxloclaw/master/scripts/auxloclaw_watchdog.sh" \
+        -o "$WATCHDOG_BIN" \
+        && chmod +x "$WATCHDOG_BIN" \
+        || echo "Warning: Failed to deploy watchdog script"
+
     echo "Browser: agent-browser (by Vercel)"
     echo "Web search: webserp (multi-engine, no API key)"
     echo "Stealth fetch: scrapling (anti-bot bypass, TLS fingerprint spoofing)"

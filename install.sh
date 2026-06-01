@@ -267,6 +267,14 @@ with sync_playwright() as p:
         ok "stealth_fetch helper script deployed"
     fi
 
+    # Deploy watchdog script (auto-restarts gateway if it crashes)
+    local WATCHDOG_BIN="/usr/local/bin/auxloclaw_watchdog.sh"
+    info "Deploying watchdog script..."
+    curl -fsSL "https://raw.githubusercontent.com/Auxlo-xyz/auxloclaw/master/scripts/auxloclaw_watchdog.sh" \
+        -o "$WATCHDOG_BIN" \
+        && chmod +x "$WATCHDOG_BIN" \
+        || warn "Failed to deploy watchdog script"
+
     echo "" >&2
     echo -e "${BOLD}Next steps:${NC}" >&2
     echo "" >&2
