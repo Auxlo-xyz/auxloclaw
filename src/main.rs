@@ -649,10 +649,11 @@ async fn chat_handler(
     axum::Json(ChatResponse { response })
 }
 
-async fn status_handler() -> axum::Json<serde_json::Value> {
+async fn status_handler(State(state): State<AppState>) -> axum::Json<serde_json::Value> {
     axum::Json(serde_json::json!({
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
+        "model": state.agent.model_name().to_string(),
         "uptime": "running"
     }))
 }

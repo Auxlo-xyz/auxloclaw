@@ -919,6 +919,10 @@ impl AgentCore {
             if let Some(ref override_prompt) = *override_lock {
                 tracing::info!("[build_system_prompt] OVERRIDE active - bypassing persona, using custom prompt ({} chars)", override_prompt.len());
                 let mut prompt = format!("{}\n\n{}", override_prompt, capability_summary);
+                prompt.push_str(&format!(
+                    "\n\n## Your Identity\nYou are powered by the `{}` LLM.",
+                    self.resolved_model_name()
+                ));
                 if !mcp_summaries.is_empty() {
                     prompt.push_str("\n\n## Connected Integrations (MCP)\n");
                     for s in &mcp_summaries {
@@ -944,6 +948,10 @@ impl AgentCore {
             .build();
 
         let mut prompt = format!("{}\n\n{}", base_prompt, capability_summary);
+        prompt.push_str(&format!(
+            "\n\n## Your Identity\nYou are powered by the `{}` LLM. If the user asks what model you are or what LLM is running you, tell them this exact model name.",
+            self.resolved_model_name()
+        ));
         if !mcp_summaries.is_empty() {
             prompt.push_str("\n\n## Connected Integrations (MCP)\n");
             for s in &mcp_summaries {
@@ -1215,6 +1223,21 @@ impl AgentCore {
 
     pub fn model_name(&self) -> &str {
         &self.config.agent.default_model
+    }
+
+    /// Resolve the actual model name for the current session, checking per-user overrides.
+    pub fn resolved_model_name(&self) -> String {
+        let channel = self.current_channel.read();
+        let user_id = self.current_user_id.read();
+        match (channel.as_deref(), user_id.as_deref()) {
+            (Some(ch), Some(uid)) => {
+                match crate::commands::model::resolve_user_model(&self.model_store, ch, uid) {
+                    Ok((_pt, _base, _key, Some(model))) => model,
+                    _ => self.config.agent.default_model.clone(),
+                }
+            }
+            _ => self.config.agent.default_model.clone(),
+        }
     }
 
     /// Run reflection on a session
