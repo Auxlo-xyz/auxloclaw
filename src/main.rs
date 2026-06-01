@@ -613,7 +613,7 @@ async fn chat_handler(
 async fn status_handler() -> axum::Json<serde_json::Value> {
     axum::Json(serde_json::json!({
         "status": "ok",
-        "version": "0.1.0",
+        "version": env!("CARGO_PKG_VERSION"),
         "uptime": "running"
     }))
 }

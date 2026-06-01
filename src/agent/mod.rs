@@ -575,7 +575,7 @@ impl AgentCore {
             // Drain any mid-loop interventions (user messages injected while running)
             while let Ok(intervention) = intervention_rx.try_recv() {
                 messages.push(Message::new("user", &intervention.message));
-                tracing::debug!("Intervention injected into session {}", session_key);
+                tracing::debug!(session = %session_key, "Intervention injected");
             }
             if iterations > max_iterations {
                 final_response = "Error: Max tool iterations reached".into();
@@ -586,7 +586,7 @@ impl AgentCore {
                 let lock = self.override_system_prompt.read().await;
                 lock.is_some()
             };
-            let request = self.build_request(messages.clone(), code_only);
+            let request = self.build_request(&messages, code_only);
 
             match self.providers.complete(request).await {
                 Ok(response) => {
@@ -601,7 +601,7 @@ impl AgentCore {
                     // Check if there are tool calls
                     if let Some(tool_calls) = &response.tool_calls {
                         if !tool_calls.is_empty() {
-                            tracing::debug!("Model returned {} tool_calls", tool_calls.len());
+                            tracing::debug!(count = tool_calls.len(), "Model returned tool_calls");
 
                             // Add assistant message with tool calls
                             messages.push(Message::with_tool_calls("assistant", tool_calls.clone()));
@@ -645,7 +645,7 @@ impl AgentCore {
                                 tracing::info!("Nudge injected after {} tool calls", nudge_threshold);
                             }
 
-                            tracing::debug!("Continuing loop with {} messages", messages.len());
+                            tracing::debug!(count = messages.len(), "Continuing loop");
                             // Continue loop to get next response
                             continue;
                         }
@@ -829,7 +829,7 @@ impl AgentCore {
         None
     }
 
-    fn build_request(&self, messages: Vec<Message>, code_only: bool) -> CompletionRequest {
+    fn build_request(&self, messages: &[Message], code_only: bool) -> CompletionRequest {
         let all_tools: Vec<crate::providers::ToolDefinition> = self
             .orchestrator
             .get_definitions()
@@ -892,7 +892,7 @@ impl AgentCore {
 
         CompletionRequest {
             model: effective_model,
-            messages,
+            messages: messages.to_vec(),
             temperature: Some(self.config.agent.temperature),
             max_tokens: Some(self.config.agent.max_tokens),
             tools: Some(tools),
