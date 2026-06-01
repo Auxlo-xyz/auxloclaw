@@ -524,7 +524,7 @@ fn non_interactive_setup(
     } else if opts.provider.as_deref() == Some("groq") {
         "https://api.groq.com/openai/v1"
     } else {
-        "https://api.openai.com/v1"
+        bail!("Unsupported provider: {}", opts.provider.as_deref().unwrap_or("unknown"))
     };
     let api_key = opts.api_key.as_deref().unwrap_or("");
     let telegram_token = opts.telegram_token.as_deref();
