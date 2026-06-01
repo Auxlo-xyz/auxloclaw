@@ -75,6 +75,10 @@ impl ProviderPool {
             providers.insert(entry.name.clone(), p);
         }
 
+        if providers.is_empty() {
+            tracing::warn!("No providers configured. Please add at least one provider to your configuration.");
+        }
+
         Self {
             providers: RwLock::new(providers),
             active_provider: RwLock::new(default),

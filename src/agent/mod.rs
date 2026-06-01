@@ -656,8 +656,15 @@ impl AgentCore {
                     break;
                 }
                 Err(e) => {
-                    tracing::error!("Provider error: {}", e);
-                    final_response = format!("Error: {}", e);
+                    let msg = e.to_string();
+                    if msg.contains("No active provider") {
+                        tracing::error!("No active provider configured");
+                        final_response = "I can't respond right now because no AI provider is configured. \
+                            Please run `auxloclaw setup` to configure a provider, or set one up in ~/.auxloclaw/config.toml".into();
+                    } else {
+                        tracing::error!("Provider error: {}", e);
+                        final_response = format!("Error: {}", e);
+                    }
                     break;
                 }
             }

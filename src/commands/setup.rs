@@ -105,27 +105,28 @@ pub fn handle_setup_with(
     
     // Provider selection
     let providers = vec![
-        "NVIDIA (stepfun-ai/step-3.5-flash)",
-        "OpenAI (gpt-4)",
-        "Anthropic (claude-3-opus)",
+        "OpenAI (gpt-4o)",
+        "Anthropic (claude-3.5-sonnet)",
+        "Google Gemini",
         "OpenRouter (multi-model)",
         "Groq (llama-3.1)",
+        "NVIDIA (stepfun-ai/step-3.5-flash)",
         "Custom endpoint",
     ];
     
     let provider_idx = Select::with_theme(&ColorfulTheme::default())
         .with_prompt("Select your LLM provider")
         .items(&providers)
-        .default(0)
         .interact()?;
     
     let (provider_name, api_base, model) = match provider_idx {
-        0 => ("nvidia", "https://integrate.api.nvidia.com/v1".to_string(), "stepfun-ai/step-3.5-flash".to_string()),
-        1 => ("openai", "https://api.openai.com/v1".to_string(), "gpt-4-turbo".to_string()),
-        2 => ("anthropic", "https://api.anthropic.com/v1".to_string(), "claude-3-opus-20240229".to_string()),
-        3 => ("openrouter", "https://openrouter.ai/api/v1".to_string(), "anthropic/claude-3-opus".to_string()),
+        0 => ("openai", "https://api.openai.com/v1".to_string(), "gpt-4o".to_string()),
+        1 => ("anthropic", "https://api.anthropic.com/v1".to_string(), "claude-3-5-sonnet-20241022".to_string()),
+        2 => ("google", "https://generativelanguage.googleapis.com/v1beta/openai".to_string(), "gemini-1.5-flash".to_string()),
+        3 => ("openrouter", "https://openrouter.ai/api/v1".to_string(), "anthropic/claude-3.5-sonnet".to_string()),
         4 => ("groq", "https://api.groq.com/openai/v1".to_string(), "llama-3.1-70b-versatile".to_string()),
-        5 => {
+        5 => ("nvidia", "https://integrate.api.nvidia.com/v1".to_string(), "stepfun-ai/step-3.5-flash".to_string()),
+        6 => {
             let base: String = Input::with_theme(&ColorfulTheme::default())
                 .with_prompt("API base URL")
                 .interact_text()?;
@@ -305,10 +306,10 @@ fn quick_setup(config_dir: &PathBuf, telegram: bool, discord: bool) -> Result<()
     
     let config = generate_config(
         "AUXLOCLAW",
-        "nvidia",
-        "https://integrate.api.nvidia.com/v1",
-        "stepfun-ai/step-3.5-flash",
-        &std::env::var("NVIDIA_API_KEY").unwrap_or_default(),
+        "openai",
+        "https://api.openai.com/v1",
+        "gpt-4o",
+        &std::env::var("OPENAI_API_KEY").or_else(|_| std::env::var("NVIDIA_API_KEY")).unwrap_or_default(),
         1.0,
         if telegram { Some("") } else { None },
         if discord { Some("") } else { None },
@@ -323,7 +324,7 @@ fn quick_setup(config_dir: &PathBuf, telegram: bool, discord: bool) -> Result<()
     }
 
     println!("Quick setup complete: {:?}", config_path);
-    println!("  Set your API key: export NVIDIA_API_KEY=your-key");
+    println!("  Set your API key: export OPENAI_API_KEY=your-key");
     println!("  Run: auxloclaw gateway");
     
     Ok(())
@@ -512,8 +513,8 @@ fn non_interactive_setup(
         fs::create_dir_all(config_dir.join("memory"))?;
     }
 
-    let provider = opts.provider.as_deref().unwrap_or("nvidia");
-    let model = opts.model.as_deref().unwrap_or("stepfun-ai/step-3.5-flash");
+    let provider = opts.provider.as_deref().unwrap_or("openai");
+    let model = opts.model.as_deref().unwrap_or("gpt-4o");
     let api_base = if opts.provider.as_deref() == Some("nvidia") {
         "https://integrate.api.nvidia.com/v1"
     } else if opts.provider.as_deref() == Some("openai") {
@@ -573,7 +574,7 @@ fn non_interactive_setup(
     println!("Configuration saved to {:?}", config_path);
     println!("Next steps: Run `auxloclaw gateway` to start.");
     if api_key.is_empty() {
-        println!("Set your API key: export NVIDIA_API_KEY=your-key");
+        println!("Set your API key: export OPENAI_API_KEY=your-key");
     }
 
     Ok(())
@@ -671,8 +672,8 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
         let config_path = tmp.join("config.toml");
         let opts = NonInteractiveOptions {
-            provider: Some("nvidia".into()),
-            model: Some("stepfun-ai/step-3.5-flash".into()),
+            provider: Some("openai".into()),
+            model: Some("gpt-4o".into()),
             api_key: None, // user did not pass --api-key
             telegram_token: None,
             discord_token: None,

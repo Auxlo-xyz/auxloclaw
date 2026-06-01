@@ -319,6 +319,19 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     let memory = Arc::new(memory::MemoryEngine::new(&config.memory)?);
     let providers = Arc::new(providers::ProviderPool::new(config.providers.clone()));
 
+    if config.providers.providers.is_empty() {
+        bann!("\x1b[33m⚠  No AI provider configured.\x1b[0m");
+        bann!("   Run `auxloclaw setup` or add a provider to ~/.auxloclaw/config.toml");
+        bann!("   Example:");
+        bann!("     [providers]");
+        bann!("     active = \"openai\"");
+        bann!("     [[providers.providers]]");
+        bann!("     name = \"openai\"");
+        bann!("     api_key = \"sk-...\"");
+        bann!("     api_base = \"https://api.openai.com/v1\"");
+        bann!("");
+    }
+
     // Initialize SQLite memory store (must come before orchestrator for session tools)
     let db_path = std::path::Path::new(&session_db);
     let memory_store = match memory::MemoryStore::new(db_path) {

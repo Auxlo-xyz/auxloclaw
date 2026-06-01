@@ -45,7 +45,7 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             name: "AUXLOCLAW".into(),
-            default_model: "nvidia/llama-3.1-nemotron-70b-instruct".into(),
+            default_model: "".into(),
             max_tokens: 8192,
             temperature: 1.0,
             max_tool_iterations: 100,
@@ -71,7 +71,7 @@ pub struct ProvidersConfig {
 }
 
 fn default_provider_name() -> String {
-    "nvidia".into()
+    "".into()
 }
 fn default_pool_size() -> usize {
     32
@@ -101,13 +101,8 @@ pub struct ProviderEntry {
 impl Default for ProvidersConfig {
     fn default() -> Self {
         Self {
-            active: "nvidia".into(),
-            providers: vec![ProviderEntry {
-                name: "nvidia".into(),
-                api_key: String::new(),
-                api_base: "https://integrate.api.nvidia.com/v1".into(),
-                extra_headers: None,
-            }],
+            active: "".into(),
+            providers: vec![],
             connection_pool_size: 32,
             request_timeout_secs: 60,
         }
