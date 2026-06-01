@@ -1,7 +1,6 @@
 //! Discord channel adapter
 use anyhow::Result;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use serenity::async_trait;
 use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
@@ -123,6 +122,28 @@ impl EventHandler for DiscordHandler {
                     return;
                 }
 
+                // Check for /new command (reset session routing)
+                if content_clone.trim() == "/new" {
+                    let uid = format!("{}", user_id);
+                    agent.reset_session_routing("discord", &uid);
+                    if let Err(e) = msg_channel.say(&http, "New session started.").await {
+                        error!("Failed to send Discord message: {}", e);
+                    }
+                    return;
+                }
+
+                // Check for /clear command (clear session history)
+                if content_clone.trim() == "/clear" {
+                    let uid = format!("{}", user_id);
+                    let session_id = agent.get_or_create_session_id("discord", &uid);
+                    agent.clear_session(&session_id).await;
+                    agent.reset_session_routing("discord", &uid);
+                    if let Err(e) = msg_channel.say(&http, "Session cleared.").await {
+                        error!("Failed to send Discord message: {}", e);
+                    }
+                    return;
+                }
+
                 // Check for /update command before passing to agent
                 if content_clone.trim().starts_with("/update") {
                     let result = crate::commands::update::handle_update().await;
@@ -184,6 +205,23 @@ impl EventHandler for DiscordHandler {
                 };
                 let _typing = msg_channel.start_typing(&http);
                 agent.set_session_context("discord", &format!("{}", msg.author.id.get())).await;
+                // If an agent loop is already running for this session, inject
+                // the message as a mid-loop intervention instead of starting
+                // a parallel process() call. The running loop will pick it up.
+                if let Some(sid) = session_id.as_ref() {
+                    if agent.session_is_active(sid).await {
+                        if agent.inject_message(sid, content.clone()).await {
+                            if let Err(e) = msg_channel.say(
+                                &http,
+                                "Got it — I'll fold that into the current task.",
+                            ).await {
+                                error!("Failed to send Discord ack: {}", e);
+                            }
+                            return;
+                        }
+                    }
+                }
+
                 let response = agent.process(&content, session_id.as_deref()).await;
 
                 // Use the simple say method for serenity 0.12

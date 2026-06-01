@@ -1,21 +1,19 @@
 //! Sub-agent with isolated context
 //! Executes specialized tasks independently
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use std::sync::Arc;
-use std::collections::HashMap;
 use tokio::sync::RwLock;
-use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
 use uuid::Uuid;
 
 use crate::config::AppConfig;
-use crate::providers::{CompletionRequest, Message, ProviderPool, ToolCall};
+use crate::providers::{CompletionRequest, Message, ProviderPool};
 use crate::orchestrator::ToolOrchestrator;
 use crate::memory::{SessionHistory, SessionStore};
 use crate::persona::PersonaConfig;
 use crate::persona::SystemPromptBuilder;
-use crate::error_recovery::{AgentError, RecoveryAction};
+use crate::error_recovery::AgentError;
 
 /// Sub-agent configuration
 #[derive(Debug, Clone)]

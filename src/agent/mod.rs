@@ -12,7 +12,7 @@ use tokio::sync::RwLock;
 use crate::capabilities::CapabilityManifest;
 use crate::checkpoints::CheckpointManager;
 use crate::config::AppConfig;
-use crate::context::{build_pruned_messages, truncate_for_summary};
+use crate::context::{build_pruned_messages};
 use crate::memory::{
     CodeModeStore,
     CompactionResult, Compactor, HistoryMessage, MemoryEngine, Reflection, Reflector,
@@ -425,6 +425,39 @@ impl AgentCore {
     /// Check if a session has a persisted code mode override
     pub fn get_persisted_code_override(&self, session_key: &str) -> Option<String> {
         self.code_mode.get_override(session_key)
+    }
+
+    /// Return the active session key for a (channel, user_id) pair WITHOUT
+    /// creating a new one. Returns `None` if no active session is routed.
+    /// Used by channels to look up the intervention target key so they can
+    /// poke a running agent loop without forcing a new session.
+    pub fn session_key_for(&self, channel: &str, user_id: &str) -> Option<String> {
+        self.memory_store
+            .as_ref()
+            .and_then(|ms| ms.get_active_session_id(channel, user_id).ok().flatten())
+    }
+
+    /// Get the active session key (creating one if needed) and return the
+    /// current `intervention_registry`. Channels use this to inject messages
+    /// into a running agent loop.
+    pub fn intervention_registry(&self) -> &InterventionRegistry {
+        &self.intervention_registry
+    }
+
+    /// Inject a user message into a running agent loop. Returns `true` if
+    /// the message was accepted (a loop is running for that session),
+    /// `false` if no loop is active.
+    pub async fn inject_message(
+        &self,
+        session_key: &str,
+        message: String,
+    ) -> bool {
+        self.intervention_registry.inject(session_key, message).await
+    }
+
+    /// Returns `true` if a session currently has an active agent loop.
+    pub async fn session_is_active(&self, session_key: &str) -> bool {
+        self.intervention_registry.is_active(session_key).await
     }
 
     /// Process a message with tool execution loop

@@ -196,7 +196,10 @@ impl TelegramState {
         // Code mode deactivation is handled by agent.clear_system_prompt_override which removes from CodeModeStore
     }
 
-    async fn clear_session(&self, chat_id: i64) {
+    /// Reset per-user session stats (token counts, message counts) in the
+    /// channel-side `SessionState`. Called by `/clear` and `/new` so a fresh
+    /// session starts with zero usage.
+    pub async fn clear_session(&self, chat_id: i64) {
         let mut sessions = self.sessions.write().await;
         sessions.insert(
             chat_id,
@@ -353,7 +356,7 @@ async fn handle_command(
             let session_id = state.agent.get_or_create_session_id("telegram", &user_id);
             state.agent.clear_session(&session_id).await;
             state.agent.reset_session_routing("telegram", &user_id);
-            state.sessions.write().await.remove(&chat_id);
+            state.clear_session(chat_id).await;
             "Session cleared".to_string()
         }
         Command::Tools => {
@@ -519,6 +522,7 @@ async fn handle_command(
         Command::New => {
             let user_id = format!("{}", chat_id);
             state.agent.reset_session_routing("telegram", &user_id);
+            state.clear_session(chat_id).await;
             "New session started".to_string()
         }
     };
@@ -937,6 +941,23 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
         state.agent.get_or_create_session_id("telegram", &user_id)
     };
     state.agent.set_session_context("telegram", &user_id).await;
+
+    // If an agent loop is already running for this session, inject the
+    // message as a mid-loop intervention instead of starting a parallel
+    // process() call. The running loop will pick it up on its next iteration.
+    if state.agent.session_is_active(&session_id).await {
+        let accepted = state.agent.inject_message(&session_id, agent_message.clone()).await;
+        if accepted {
+            send_markdown_message(
+                &bot,
+                chat_id,
+                "Got it — I'll fold that into the current task.",
+            )
+            .await?;
+            return Ok(());
+        }
+    }
+
     let response = state
         .agent
         .process(&agent_message, Some(&session_id))

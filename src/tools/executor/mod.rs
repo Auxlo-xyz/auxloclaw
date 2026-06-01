@@ -29,8 +29,8 @@ use tokio::time::timeout;
 use crate::orchestrator::{Tool, ToolResult};
 
 pub use environment::{
-    ExecutionConfig, ExecutionEngine, ProcessOutput, Environment,
-    EnvironmentType, DockerEnvConfig, SshEnvConfig, TerminalConfig,
+    ExecutionConfig, Environment,
+    EnvironmentType, TerminalConfig,
 };
 pub use local_env::LocalEnvironment;
 pub use docker_env::DockerEnvironment;

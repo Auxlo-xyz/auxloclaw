@@ -329,6 +329,19 @@ impl Tool for TranscribeAudioTool {
             });
         }
 
+        if !is_audio_file(&path) {
+            return Ok(ToolResult {
+                tool_name: "transcribe_audio".to_string(),
+                success: false,
+                output: json!(format!(
+                    "Not an audio file (by extension): {}. Supported: mp3, wav, ogg, opus, flac, m4a, aac, wma, webm, amr, 3gp.",
+                    path
+                )),
+                error: Some(format!("Unsupported file extension for transcription: {}", path)),
+                duration_ms: start.elapsed().as_millis() as u64,
+            });
+        }
+
         let model_size = args
             .get("model_size")
             .and_then(|m| m.as_str())
@@ -358,6 +371,7 @@ impl Tool for TranscribeAudioTool {
             Ok(transcription) => {
                 let formatted = format_transcription(&transcription);
                 let duration_ms = start.elapsed().as_millis() as u64;
+                let is_voice_note = is_voice_file(&path);
                 Ok(ToolResult {
                     tool_name: "transcribe_audio".to_string(),
                     success: true,
@@ -366,6 +380,7 @@ impl Tool for TranscribeAudioTool {
                         "language": transcription.language,
                         "duration_seconds": transcription.duration,
                         "segment_count": transcription.segments.len(),
+                        "is_voice_note": is_voice_note,
                         "formatted": formatted,
                     }),
                     error: None,
@@ -407,6 +422,92 @@ mod tests {
         assert!(is_voice_file("/tmp/voice_123.ogg"));
         assert!(is_voice_file("/tmp/recording.opus"));
         assert!(!is_voice_file("/tmp/song.mp3"));
+    }
+
+    #[test]
+    fn test_is_audio_file_case_insensitive() {
+        // Extensions must be matched case-insensitively (uppercase + mixed)
+        assert!(is_audio_file("AUDIO.MP3"));
+        assert!(is_audio_file("Recording.WAV"));
+        assert!(is_audio_file("clip.Opus"));
+        assert!(is_audio_file("voice.OGG"));
+        assert!(is_audio_file("song.FlAc"));
+    }
+
+    #[test]
+    fn test_is_audio_file_all_supported_extensions() {
+        // Cover every entry in AUDIO_EXTENSIONS
+        for ext in &["mp3", "wav", "ogg", "opus", "flac", "m4a", "aac", "wma", "webm", "amr", "3gp"] {
+            assert!(
+                is_audio_file(&format!("/tmp/sample.{ext}")),
+                "expected .{ext} to be classified as audio"
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_audio_file_unsupported_extensions() {
+        for path in &[
+            "/tmp/image.png",
+            "/tmp/photo.jpg",
+            "/tmp/video.mp4",
+            "/tmp/text.txt",
+            "/tmp/doc.pdf",
+            "/tmp/script.py",
+            "/tmp/archive.zip",
+        ] {
+            assert!(!is_audio_file(path), "expected {path} to NOT be audio");
+        }
+    }
+
+    #[test]
+    fn test_is_audio_file_no_extension() {
+        assert!(!is_audio_file("/tmp/audio"));
+        assert!(!is_audio_file("voice"));
+        assert!(!is_audio_file(""));
+    }
+
+    #[test]
+    fn test_is_audio_file_pathless_filename() {
+        assert!(is_audio_file("clip.mp3"));
+        assert!(is_audio_file("clip.MP3"));
+        assert!(!is_audio_file("clip"));
+    }
+
+    #[test]
+    fn test_is_audio_file_query_string_and_fragment() {
+        // Path::new("/a/b.mp3?x=1").extension() == Some("mp3?x=1") which is
+        // not in the list -- this documents the current behavior. We assert it
+        // so any future fix is intentional.
+        assert!(!is_audio_file("/a/b.mp3?x=1"));
+    }
+
+    #[test]
+    fn test_is_voice_file_ogg_and_opus_extensions() {
+        // Any path ending in .ogg or .opus is treated as a voice message
+        assert!(is_voice_file("/tmp/voice_1.ogg"));
+        assert!(is_voice_file("/tmp/voice_1.opus"));
+        assert!(is_voice_file("song.OGG"));
+        assert!(is_voice_file("song.Opus"));
+    }
+
+    #[test]
+    fn test_is_voice_file_voice_substring() {
+        // Telegram download path includes "voice_<id>.ogg" -- the helper
+        // should match on the substring pattern, not just the extension.
+        assert!(is_voice_file("/var/tmp/voice_42.ogg"));
+        assert!(is_voice_file("/home/user/Voice_Notes/clip.ogg"));
+        // Other audio extensions are NOT voice by default
+        assert!(!is_voice_file("/tmp/song.mp3"));
+        assert!(!is_voice_file("/tmp/song.wav"));
+        assert!(!is_voice_file("/tmp/recording.m4a"));
+    }
+
+    #[test]
+    fn test_is_voice_file_empty_and_pathless() {
+        assert!(!is_voice_file(""));
+        assert!(!is_voice_file("clip"));
+        assert!(!is_voice_file("/tmp/audio"));
     }
 
     #[test]

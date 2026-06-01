@@ -61,6 +61,26 @@ pub enum CoordinatorEvent {
 }
 
 impl AgentCoordinator {
+    /// Replace the cost-aware delegator (e.g. with one loaded from disk).
+    /// This is what makes `record_usage`, `budget_status`, `set_sub_agents_enabled`,
+    /// `set_min_complexity`, `set_max_budget`, and `stats` actually surface
+    /// runtime data instead of being dead code.
+    pub async fn set_cost_aware_delegator(&self, delegator: CostAwareDelegator) {
+        *self.cost_aware_delegator.write().await = delegator;
+    }
+
+    /// Snapshot of the current delegation stats (delegated/kept counts,
+    /// budget used, etc.). Used by `auxloclaw status --delegation`.
+    pub async fn cost_aware_delegator_stats(&self) -> DelegationStats {
+        self.cost_aware_delegator.read().await.stats()
+    }
+
+    /// Clone the current cost-aware delegator for snapshotting (used by
+    /// shutdown persistence and the `auxloclaw status --delegation` command).
+    pub async fn cost_aware_delegator_snapshot(&self) -> CostAwareDelegator {
+        self.cost_aware_delegator.read().await.clone()
+    }
+
     pub fn new(
         main_agent: Arc<crate::agent::AgentCore>,
         providers: Arc<ProviderPool>,

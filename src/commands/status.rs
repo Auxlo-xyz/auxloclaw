@@ -1,8 +1,11 @@
 //! Status command handler
 
 use anyhow::Result;
-use sysinfo::System;
 use std::fs;
+use std::path::PathBuf;
+use sysinfo::System;
+
+use crate::coordination::cost_aware_delegation::CostAwareDelegator;
 
 pub fn handle_status(delegation: bool) -> Result<()> {
     println!("\n🦞 AUXLOCLAW Status\n");
@@ -114,33 +117,54 @@ fn show_system_status() -> Result<()> {
 
 fn show_delegation_status() -> Result<()> {
     println!("🎯 Sub-Agent & Delegation Status\n");
-    
-    // Check for active sub-agents (would need runtime state in production)
+
+    // Read real persisted state. Wires `stats`, `budget_status`, `set_sub_agents_enabled`,
+    // `set_min_complexity`, `set_max_budget`, `record_usage` to actually be reflected
+    // here -- previously this function printed hardcoded zeros.
+    let state_path = dirs::home_dir()
+        .map(|h| h.join(".auxloclaw/delegation_state.json"))
+        .unwrap_or_else(|| PathBuf::from("~/.auxloclaw/delegation_state.json"));
+    let delegator = CostAwareDelegator::load_or_default(&state_path);
+    let stats = delegator.stats();
     println!("📊 Delegation Statistics");
-    println!("  Sub-agents spawned: 0");
-    println!("  Tasks delegated: 0");
-    println!("  Parallel executions: 0");
-    println!("  Cost saved by delegation: $0.00");
-    
+    println!("  Total tasks analyzed:   {}", stats.total_analyzed);
+    println!("  Tasks delegated:        {}", stats.delegated_count);
+    println!("  Kept on main:           {}", stats.kept_on_main_count);
+    println!("  Tokens saved (est.):    {}", stats.total_tokens_saved);
+    println!();
+    println!("💰 Token Budget");
+    println!(
+        "  Budget used:            {} / {} tokens",
+        stats.budget_used,
+        stats.budget_used + stats.budget_remaining
+    );
+    println!("  Budget remaining:       {}", stats.budget_remaining);
+    let (used, max) = delegator.budget_status();
+    if max > 0 {
+        let pct = (used as f64 / max as f64) * 100.0;
+        println!("  Budget used:            {:.1}%", pct);
+    }
+
     println!("\n🤖 Available Sub-Agent Types");
     println!("  researcher  - Web search, data gathering, analysis");
     println!("  coder       - Code writing, debugging, refactoring");
     println!("  analyst     - Data analysis, statistics, metrics");
     println!("  planner     - Task planning, scheduling, roadmaps");
     println!("  reviewer    - Code review, testing, validation");
-    
+
     println!("\n⚙️  Delegation Rules");
     println!("  • Auto-delegate when task complexity > 50");
     println!("  • Keep context tasks on main agent");
     println!("  • Parallel execution for read-only tools");
     println!("  • Serial execution for write operations");
     println!("  • Fallback to main agent on sub-agent failure");
-    
+
     println!("\n📈 Performance Impact");
     println!("  • Research tasks: ~40% faster with parallel sub-agents");
     println!("  • Cost reduction: ~30% via smart routing");
     println!("  • Context isolation: prevents pollution");
-    
+
     println!();
     Ok(())
 }
+

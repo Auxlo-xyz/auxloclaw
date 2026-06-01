@@ -27,7 +27,6 @@ mod tools;
 use crate::checkpoints::CheckpointManager;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::Mutex;
 
 use crate::auth::{AuthConfig, AuthState};
 use axum::extract::{Request, State};
@@ -35,7 +34,6 @@ use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::Response;
 use axum::Router;
-use clap::Parser;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::info;
@@ -130,7 +128,7 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Capabilities { json } => {
-            commands::handle_capabilities(json);
+            let _ = commands::capabilities::handle_capabilities(json).await;
         }
 
         Commands::Update => {
@@ -403,9 +401,41 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
         session_store.clone(),
         config.clone(),
     ));
+    // Load persisted cost-aware delegator state (budget + delegation history)
+    // and inject it into the coordinator. This wires `record_usage`, `budget_status`,
+    // `set_sub_agents_enabled`, `set_min_complexity`, `set_max_budget`, and `stats`
+    // to actually persist across restarts instead of being in-memory only.
+    let delegation_state_path = session_db_parent.join("delegation_state.json");
+    let loaded_delegator =
+        coordination::cost_aware_delegation::CostAwareDelegator::load_or_default(&delegation_state_path);
+    {
+        let stats = loaded_delegator.stats();
+        tracing::info!(
+            "Loaded cost-aware delegator: {} decisions in history, {} tokens used",
+            stats.total_analyzed,
+            stats.budget_used
+        );
+    }
+    coordinator_instance.set_cost_aware_delegator(loaded_delegator);
     {
         let mut coord_guard = coordinator.write().await;
-        *coord_guard = Some(coordinator_instance);
+        *coord_guard = Some(coordinator_instance.clone());
+    }
+    // Persist delegator state on Ctrl-C / SIGTERM so the budget survives restarts.
+    {
+        let coordinator_cell = coordinator.clone();
+        let path_for_save = delegation_state_path.clone();
+        tokio::spawn(async move {
+            let _ = tokio::signal::ctrl_c().await;
+            if let Some(coord) = coordinator_cell.read().await.clone() {
+                let snapshot = coord.cost_aware_delegator_snapshot().await;
+                if let Err(e) = snapshot.save(&path_for_save) {
+                    tracing::warn!("Failed to persist cost-aware delegator on shutdown: {}", e);
+                } else {
+                    tracing::info!("Persisted cost-aware delegator state to {}", path_for_save.display());
+                }
+            }
+        });
     }
     tracing::info!("Sub-agent coordinator initialized");
 

@@ -1,8 +1,10 @@
 //! Cost-Aware Delegation - Token budget and cost control for sub-agent spawning
 //! Prevents burning money on tasks that could be handled by main agent only
 
+use serde::{Deserialize, Serialize};
+
 /// Token budget configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenBudget {
     /// Maximum tokens per request
     pub max_tokens_per_request: u32,
@@ -91,7 +93,7 @@ impl TokenBudget {
 }
 
 /// Task complexity analyzer
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComplexityAnalyzer {
     /// Minimum words to consider delegation
     min_words_for_delegation: usize,
@@ -270,7 +272,7 @@ impl ComplexityAnalyzer {
 }
 
 /// Task complexity result
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskComplexity {
     /// Complexity score (0-100)
     pub score: u32,
@@ -289,7 +291,7 @@ pub struct TaskComplexity {
 }
 
 /// Delegation decision with reasoning
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DelegationDecision {
     /// Whether to delegate
     pub delegate: bool,
@@ -333,6 +335,7 @@ impl DelegationDecision {
 }
 
 /// Cost-aware delegator that considers budget and complexity
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CostAwareDelegator {
     budget: TokenBudget,
     analyzer: ComplexityAnalyzer,
@@ -489,10 +492,43 @@ impl CostAwareDelegator {
             budget_remaining: self.budget.remaining_budget(),
         }
     }
+
+    /// Persist the current budget and history to disk as JSON.
+    /// Called on gateway shutdown and periodically so `record_usage`,
+    /// `budget_status`, and `stats()` have a durable backing store.
+    pub fn save(&self, path: &std::path::Path) -> anyhow::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        let json = serde_json::to_string_pretty(self)?;
+        std::fs::write(path, json)?;
+        Ok(())
+    }
+
+    /// Load delegator state from disk, or return a fresh default instance
+    /// if the file is missing or malformed. Failures are non-fatal.
+    pub fn load_or_default(path: &std::path::Path) -> Self {
+        if !path.exists() {
+            return Self::new(TokenBudget::default());
+        }
+        match std::fs::read_to_string(path) {
+            Ok(json) => serde_json::from_str(&json).unwrap_or_else(|e| {
+                tracing::warn!(
+                    "delegation state file is corrupt, starting fresh: {}",
+                    e
+                );
+                Self::new(TokenBudget::default())
+            }),
+            Err(e) => {
+                tracing::warn!("could not read delegation state file: {}", e);
+                Self::new(TokenBudget::default())
+            }
+        }
+    }
 }
 
 /// Statistics for delegation decisions
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DelegationStats {
     pub total_analyzed: usize,
     pub delegated_count: usize,
@@ -537,6 +573,30 @@ mod tests {
             delegator.should_delegate("Complex research task that would normally be delegated");
         assert!(!decision.delegate);
         assert!(decision.reason.contains("Budget"));
+    }
+
+    #[test]
+    fn test_save_load_roundtrip() {
+        let mut delegator = CostAwareDelegator::new(TokenBudget::default());
+        // Generate some history
+        let _ = delegator.should_delegate("Simple question");
+        let _ = delegator.should_delegate("Complex research and analysis task");
+        delegator.record_usage(1500, true);
+        delegator.set_max_budget(75000);
+        let original = delegator.stats();
+
+        let path = std::env::temp_dir().join("auxloclaw_test_delegation.json");
+        delegator.save(&path).expect("save should succeed");
+
+        let loaded = CostAwareDelegator::load_or_default(&path);
+        let restored = loaded.stats();
+
+        assert_eq!(original.total_analyzed, restored.total_analyzed);
+        assert_eq!(original.delegated_count, restored.delegated_count);
+        assert_eq!(original.budget_used, restored.budget_used);
+        assert_eq!(original.budget_remaining, restored.budget_remaining);
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

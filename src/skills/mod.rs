@@ -22,7 +22,7 @@ pub mod extractor;
 
 pub use registry::SkillRegistry;
 pub use installer::SkillInstaller;
-pub use extractor::{ExtractorConfig, SkillExtractor, ToolTraceEntry, ExtractionTrigger};
+pub use extractor::{ExtractorConfig, SkillExtractor, ToolTraceEntry};
 
 /// Skill metadata (frontmatter)
 #[derive(Debug, Clone, Serialize, Deserialize)]
