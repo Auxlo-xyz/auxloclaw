@@ -592,6 +592,7 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     // Build HTTP router
     let app = Router::new()
         .route("/health", axum::routing::get(|| async { "OK" }))
+        .route("/", axum::routing::get(dashboard_handler))
         .route("/chat", axum::routing::post(chat_handler))
         .route("/api/chat", axum::routing::post(chat_handler))
         .route("/api/status", axum::routing::get(status_handler))
@@ -706,3 +707,93 @@ async fn list_reflections_handler(
     }
 }
 
+async fn dashboard_handler() -> impl axum::response::IntoResponse {
+    let html = r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AUXLOCLAW Gateway</title>
+<style>
+:root { color-scheme: dark; }
+body { font-family: system-ui, sans-serif; background: #0f1117; color: #e1e4e8; margin: 0; padding: 2rem; }
+.container { max-width: 700px; margin: 0 auto; }
+h1 { color: #58a6ff; font-size: 1.8rem; margin-bottom: 0.2rem; }
+.tagline { color: #8b949e; margin-bottom: 2rem; }
+.card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem; }
+.card h2 { margin-top: 0; font-size: 1.25rem; color: #c9d1d9; }
+.card p { color: #8b949e; line-height: 1.6; }
+.status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+.status-ok { background: #3fb950; }
+.status-off { background: #f85149; }
+.status-warn { background: #d29922; }
+table { width: 100%; border-collapse: collapse; }
+td { padding: 0.5rem 0; border-bottom: 1px solid #21262d; }
+td:first-child { color: #8b949e; }
+td:last-child { text-align: right; color: #c9d1d9; font-weight: 500; }
+a, a:visited { color: #58a6ff; }
+code { background: #21262d; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; }
+.endpoint { color: #7ee787; font-family: monospace; font-size: 0.9em; }
+pre { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 1rem; overflow-x: auto; font-size: 0.85rem; }
+pre code { background: none; padding: 0; }
+.footer { text-align: center; margin-top: 4rem; color: #484f58; font-size: 0.8rem; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>🦞 AUXLOCLAW Gateway</h1>
+<p class="tagline">AI Agent Framework — now running and ready for requests.</p>
+
+<div class="card">
+<h2>🔗 API Endpoints</h2>
+<table>
+<tr><td>Health</td><td><span class="endpoint">GET /health</span></td></tr>
+<tr><td>Status</td><td><span class="endpoint">GET /api/status</span></td></tr>
+<tr><td>Capabilities</td><td><span class="endpoint">GET /api/capabilities</span></td></tr>
+<tr><td>Skills</td><td><span class="endpoint">GET /api/skills</span></td></tr>
+<tr><td>Chat</td><td><span class="endpoint">POST /api/chat</span></td></tr>
+<tr><td>Reflect</td><td><span class="endpoint">POST /api/reflect</span></td></tr>
+</table>
+</div>
+
+<div class="card">
+<h2>📱 Channels</h2>
+<p>Connect via <strong>Telegram</strong> or <strong>Discord</strong> to interact with the agent. Configured in <code>~/.auxloclaw/config.toml</code></p>
+</div>
+
+<div class="card">
+<h2>💬 Quick Chat</h2>
+<textarea id="chat-input" placeholder="Type a message..." style="width:100%;height:80px;background:#0d1117;color:#e1e4e8;border:1px solid #30363d;border-radius:6px;padding:10px;font-size:1rem;resize:vertical;"></textarea>
+<button onclick="sendMessage()" style="margin-top:10px;background:#238636;color:#fff;border:none;border-radius:6px;padding:10px 20px;cursor:pointer;font-size:1rem;">Send</button>
+<pre id="response" style="margin-top:10px;min-height:40px;"><code>Response will appear here...</code></pre>
+</div>
+
+<div class="footer">
+<p>AUXLOCLAW &copy; 2025–2026 &middot; AI Agent Framework</p>
+</div>
+</div>
+<script>
+async function sendMessage() {
+  const input = document.getElementById('chat-input');
+  const response = document.getElementById('response');
+  const msg = input.value.trim();
+  if (!msg) return;
+  response.textContent = 'Thinking...';
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg })
+    });
+    const data = await res.json();
+    response.textContent = data.response || JSON.stringify(data, null, 2);
+  } catch (err) {
+    response.textContent = 'Error: ' + err.message;
+  }
+}
+</script>
+</body>
+</html>"#;
+
+    axum::response::Html(html)
+}

@@ -228,6 +228,16 @@ pub async fn start(
 
     let bot = Bot::new(config.token.clone());
 
+    // Verify that the bot token is valid and the bot is reachable
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        bot.get_me(),
+    ).await {
+        Ok(Ok(me)) => tracing::info!("✅ Telegram bot verified: @{} (ID: {})", me.user.username.as_deref().unwrap_or("unknown"), me.user.id.0),
+        Ok(Err(e)) => tracing::warn!("⚠️  Telegram bot verification failed (wrong token?): {e}"),
+        Err(_) => tracing::warn!("⚠️  Telegram bot verification timed out (check network or token)"),
+    }
+
     // Create Telegram adapter for mid-task message delivery
     let default_chat_id = config.allowed_users.first()
         .and_then(|u| u.parse::<i64>().ok());
@@ -734,6 +744,31 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
 
     // Intercept model setup flow BEFORE any other check
     let text = msg.text().unwrap_or("");
+
+    // `/start` — welcome message with common tasks
+    if text.trim() == "/start" {
+        let first = msg.from().as_ref().map(|u| u.first_name.as_str()).unwrap_or("there");
+        let welcome = format!(
+            "Welcome, {first}! I am *AUXLOCLAW*, your AI agent.\n\n\
+             \u{1f9e0} Chat naturally \u{2014} I remember our conversations.\n\
+             \u{1f50d} Ask me to search the web, run code, or analyze files.\n\
+             \u{1f4f1} Just message me here or on Discord.\n\n\
+             *Get started:*\n\
+             \u{2022} Just type a message to chat\n\
+             \u{2022} /model \u{2014} choose your AI provider\n\
+             \u{2022} /help \u{2014} see all commands\n\
+             \u{2022} /status \u{2014} check my status\n\
+             \u{2022} /token set <KEY> <value> \u{2014} set up your API keys\n\n\
+             \u{26a1} I am ready when you are!"
+        );
+        send_markdown_message(
+            &bot,
+            chat_id,
+            &welcome,
+        ).await?;
+        return Ok(());
+    }
+
     {
         let mut flows = state.pending_model_flows.write().await;
         if let Some(flow) = flows.remove(&chat_id) {
