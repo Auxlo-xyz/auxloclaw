@@ -558,6 +558,21 @@ impl AppConfig {
     }
 
     fn with_env_overrides(mut self) -> Self {
+        // First: any provider whose key is empty OR still the setup placeholder
+        // can be filled from a single global `AUXLOCLAW_API_KEY` env var.
+        // This lets users export a key once instead of repeating it in
+        // config.toml for every provider.
+        let global_key = std::env::var("AUXLOCLAW_API_KEY")
+            .ok()
+            .filter(|k| !k.trim().is_empty());
+        const PLACEHOLDER: &str = "<set via auxloclaw token or AUXLOCLAW_API_KEY env>";
+        for provider in &mut self.providers.providers {
+            if provider.api_key.is_empty() || provider.api_key == PLACEHOLDER {
+                if let Some(ref k) = global_key {
+                    provider.api_key = k.clone();
+                }
+            }
+        }
         // Check if any provider has an empty API key and try to fill from env
         for provider in &mut self.providers.providers {
             if provider.api_key.is_empty() {

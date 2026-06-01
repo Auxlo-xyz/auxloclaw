@@ -256,6 +256,9 @@ pub fn handle_setup_with(
     );
     
     fs::write(&config_path, &config)?;
+    if let Err(e) = restrict_permissions(&config_path) {
+        eprintln!("Warning: could not restrict permissions on config: {e}");
+    }
     println!("\nConfiguration saved to {:?}", config_path);
     
     // Save token store
@@ -315,12 +318,67 @@ fn quick_setup(config_dir: &PathBuf, telegram: bool, discord: bool) -> Result<()
     
     let config_path = config_dir.join("config.toml");
     fs::write(&config_path, &config)?;
-    
+    if let Err(e) = restrict_permissions(&config_path) {
+        eprintln!("Warning: could not restrict permissions on config: {e}");
+    }
+
     println!("Quick setup complete: {:?}", config_path);
     println!("  Set your API key: export NVIDIA_API_KEY=your-key");
     println!("  Run: auxloclaw gateway");
     
     Ok(())
+}
+
+#[cfg(unix)]
+pub fn restrict_permissions(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let perms = std::fs::Permissions::from_mode(0o600);
+    std::fs::set_permissions(path, perms)
+}
+
+#[cfg(not(unix))]
+pub fn restrict_permissions(path: &std::path::Path) -> std::io::Result<()> {
+    // On non-Unix we don't have a portable chmod equivalent. Best-effort:
+    // mark the file readonly. This won't hide secrets from admin users but
+    // it stops accidental world-writes.
+    let mut perms = std::fs::metadata(path)?.permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(path, perms)
+}
+
+/// Decide what to actually write into `[providers.primary].api_key`.
+///
+/// The user can pass a real key in any of three ways:
+/// 1. They typed it in the interactive wizard.
+/// 2. They passed `--api-key` on the command line.
+/// 3. They exported `AUXLOCLAW_API_KEY` in their environment.
+///
+/// In all three cases we write the literal key into `config.toml`.
+/// If the key is empty (or matches a known placeholder string), we write
+/// the canonical placeholder so the user can search for it later and run
+/// `auxloclaw token set` to fill in the real value. This is the
+/// "non-secret default" path -- the file no longer contains a blank
+/// string and it doesn't pretend the key is set.
+fn sanitize_api_key(
+    key: &str,
+    env_var: &str,
+) -> String {
+    const PLACEHOLDER: &str = "<set via auxloclaw token or AUXLOCLAW_API_KEY env>";
+    if key.trim().is_empty() {
+        return PLACEHOLDER.to_string();
+    }
+    // If the user typed the placeholder or any common no-op, treat as empty.
+    let trimmed = key.trim();
+    let known_placeholders = ["<set via auxloclaw token>", "<set via env>", "<set later>", "changeme", "your-key-here", "TODO"];
+    if known_placeholders.contains(&trimmed) {
+        return PLACEHOLDER.to_string();
+    }
+    key.to_string()
+}
+
+/// Return the placeholder string so callers can reference it in user-facing output.
+pub fn api_key_placeholder() -> &'static str {
+    "<set via auxloclaw token or AUXLOCLAW_API_KEY env>"
 }
 
 fn generate_config(
@@ -353,7 +411,7 @@ request_timeout_secs = 120
 [providers.primary]
 name = "{}"
 api_base = "{}"
-api_key = "{}"
+api_key = "{}"  # set via auxloclaw token or env var
 
 [providers.fallbacks]
 
@@ -399,7 +457,7 @@ enabled = true
         temperature,
         provider,
         api_base,
-        api_key,
+        sanitize_api_key(api_key, "AUXLOCLAW_API_KEY"),
         telegram_token.is_some() && telegram_token.unwrap_or("").trim().is_empty() == false,
         telegram_token.unwrap_or("").trim(),
         discord_token.is_some() && discord_token.unwrap_or("").trim().is_empty() == false,
@@ -489,6 +547,9 @@ fn non_interactive_setup(
     );
 
     fs::write(config_path, &config)?;
+    if let Err(e) = restrict_permissions(config_path) {
+        eprintln!("Warning: could not restrict permissions on config: {e}");
+    }
 
     let mut enabled_telegram = false;
     let mut enabled_discord = false;
@@ -571,5 +632,62 @@ mod tests {
         let err = bail_non_tty();
         let msg = err.to_string();
         assert!(msg.contains("terminal"), "bail message must mention 'terminal', got: {msg}");
+    }
+
+    #[test]
+    fn sanitize_api_key_redacts_empty_and_placeholder() {
+        // Empty key becomes the canonical placeholder
+        assert!(sanitize_api_key("", "X").contains("set via auxloclaw token"));
+        // Known no-op placeholders also become the canonical placeholder
+        assert_eq!(sanitize_api_key("changeme", "X"), api_key_placeholder());
+        assert_eq!(sanitize_api_key("TODO", "X"), api_key_placeholder());
+        assert_eq!(sanitize_api_key("your-key-here", "X"), api_key_placeholder());
+        // A real key is returned as-is
+        assert_eq!(sanitize_api_key("sk-abcdef123456", "X"), "sk-abcdef123456");
+    }
+
+    #[test]
+    fn restrict_permissions_creates_file_with_600() {
+        let tmp = env::temp_dir().join(format!("auxloclaw-perms-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        let p = tmp.join("config.toml");
+        fs::write(&p, "secret=1").unwrap();
+        // Apply restrictive perms
+        restrict_permissions(&p).expect("chmod should succeed on unix");
+        // Verify on unix only
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "config file must be chmod 600, got {mode:o}");
+        }
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn interactive_config_does_not_contain_real_key_when_none_provided() {
+        let tmp = env::temp_dir().join(format!("auxloclaw-no-key-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let config_path = tmp.join("config.toml");
+        let opts = NonInteractiveOptions {
+            provider: Some("nvidia".into()),
+            model: Some("stepfun-ai/step-3.5-flash".into()),
+            api_key: None, // user did not pass --api-key
+            telegram_token: None,
+            discord_token: None,
+            github_token: None,
+        };
+        non_interactive_setup(&tmp, &config_path, &opts).expect("setup should succeed");
+        let body = fs::read_to_string(&config_path).unwrap();
+        // The actual key should NOT be present (it was never provided), and the
+        // placeholder should be in its place so the user can search for it.
+        assert!(
+            body.contains(api_key_placeholder()),
+            "config must contain the placeholder when no api key was given, body: {body}"
+        );
+        // And it must NOT contain a stray real key (e.g. from env or default).
+        assert!(!body.contains("sk-live"), "config must not contain a hardcoded key");
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

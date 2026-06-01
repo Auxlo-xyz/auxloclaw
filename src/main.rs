@@ -41,12 +41,36 @@ use tracing_subscriber::EnvFilter;
 
 use cli::{Cli, Commands};
 
+/// Print a high-signal lifecycle message to stderr. Unlike `tracing::info!`,
+/// this is NOT suppressed by log level -- it's the user-facing "what's
+/// happening" channel. Used for: gateway started, telegram connected,
+/// config loaded, ready, etc.
+///
+/// Goes to stderr so it never interleaves with stdout (e.g. the `chat`
+/// command's response goes to stdout; if we logged to stdout we'd corrupt
+/// the user-visible output).
+#[macro_export]
+macro_rules! bann {
+    ($($arg:tt)*) => {{
+        eprintln!($($arg)*);
+    }}
+}
+
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Cli::parse_args();
 
     // Initialize logging with file appender (writes to both stderr and ~/.auxloclaw/logs/)
-    let level = if args.debug { "debug" } else { "info" };
+    // Default: only warnings+ reach stderr. info+ still goes to the rotating log file
+    // under ~/.auxloclaw/logs/. The `--debug` flag raises the global level for both
+    // destinations. `RUST_LOG` always wins if set, which is the standard escape hatch
+    // for operators and for `auxloclaw logs` follow mode.
+    let level = if args.debug {
+        "debug".to_string()
+    } else {
+        std::env::var("RUST_LOG").unwrap_or_else(|_| "warn".to_string())
+    };
     let log_dir = dirs::home_dir()
         .map(|h| h.join(".auxloclaw/logs"))
         .unwrap_or_else(|| std::path::PathBuf::from("/tmp/auxloclaw/logs"));
@@ -274,7 +298,7 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     };
     let auth_state = Arc::new(AuthState::new(auth_config));
 
-    info!("🦞 AUXLOCLAW v{} initializing...", env!("CARGO_PKG_VERSION"));
+    bann!("\x1b[36m🦞 AUXLOCLAW v{}\x1b[0m initializing...", env!("CARGO_PKG_VERSION"));
 
     let start = Instant::now();
 
@@ -464,7 +488,7 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     scheduler_manager.set_live_scheduler(agent.clone(), cron_handle.clone());
     orchestrator.register_schedule_management_tools(scheduler_manager);
 
-    info!("⚡ Core initialized in {:?}", start.elapsed());
+    bann!("\x1b[32m⚡ Core initialized in {:?}\x1b[0m", start.elapsed());
 
     // Zombie child reaper - reap orphaned child processes every 30s
     #[cfg(unix)]
@@ -508,7 +532,7 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     let _discord_handle = if config.channels.discord.enabled {
         let discord_agent = agent.clone();
         let discord_config = config.channels.discord.clone();
-        info!("💬 Starting Discord gateway...");
+        bann!("💬 Starting Discord gateway...");
 
         // Create Discord adapter for mid-task message delivery
         let discord_http = Arc::new(serenity::http::Http::new(&discord_config.token));
@@ -529,7 +553,7 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
         let tg_config = config.channels.telegram.clone();
         let tg_persona = config.persona.clone();
         let tg_router = Arc::new(message_router);
-        info!("📱 Starting Telegram gateway...");
+        bann!("📱 Starting Telegram gateway...");
         Some(tokio::spawn(async move {
             if let Err(e) = channels::telegram::start(tg_agent, model_store.clone(), code_mode.clone(), Some(tg_config), tg_persona, Some(tg_router)).await {
                 tracing::error!("Telegram error: {}", e);
@@ -595,8 +619,8 @@ async fn run_gateway(host: &str, port: u16) -> anyhow::Result<()> {
     let addr = format!("{}:{}", host, port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    info!("🌐 HTTP server listening on {}", addr);
-    info!("✅ Ready in {:?}", start.elapsed());
+    bann!("🌐 HTTP server listening on http://{}", addr);
+    bann!("\x1b[1;32m✅ Ready in {:?}\x1b[0m -- API at http://{}/", start.elapsed(), addr);
 
     axum::serve(listener, app).await?;
 
