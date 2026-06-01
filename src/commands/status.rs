@@ -46,10 +46,15 @@ fn show_system_status() -> Result<()> {
         if config_path.exists() {
             println!("  Config file: ✓");
             
-            // Show active provider
+            // Show active provider and model
             if let Ok(content) = fs::read_to_string(&config_path) {
-                if let Some(line) = content.lines().find(|l| l.starts_with("default_model")) {
-                    println!("  Model: {}", line.split('=').last().unwrap_or("unknown").trim().trim_matches('"'));
+                if let Ok(toml_val) = content.parse::<toml::Value>() {
+                    if let Some(model) = toml_val.get("agent").and_then(|a| a.get("default_model")).and_then(|m| m.as_str()) {
+                        println!("  Model: {}", model);
+                    }
+                    if let Some(active) = toml_val.get("providers").and_then(|p| p.get("active")).and_then(|a| a.as_str()) {
+                        println!("  Provider: {}", if active.is_empty() { "(none)" } else { active });
+                    }
                 }
             }
         } else {

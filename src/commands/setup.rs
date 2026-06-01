@@ -409,12 +409,10 @@ timezone = "UTC"
 connection_pool_size = 32
 request_timeout_secs = 120
 
-[providers.primary]
+[[providers.providers]]
 name = "{}"
 api_base = "{}"
 api_key = "{}"  # set via auxloclaw token or env var
-
-[providers.fallbacks]
 
 [memory]
 database_path = "~/.auxloclaw/memory.db"
@@ -526,7 +524,7 @@ fn non_interactive_setup(
     } else if opts.provider.as_deref() == Some("groq") {
         "https://api.groq.com/openai/v1"
     } else {
-        "https://integrate.api.nvidia.com/v1"
+        "https://api.openai.com/v1"
     };
     let api_key = opts.api_key.as_deref().unwrap_or("");
     let telegram_token = opts.telegram_token.as_deref();
