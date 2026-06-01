@@ -206,6 +206,40 @@ raise SystemExit(1)
     echo "Web search: webserp (multi-engine, no API key)"
     echo "Stealth fetch: scrapling (anti-bot bypass, TLS fingerprint spoofing)"
     echo "Audio transcription: faster-whisper (local Whisper model)"
+
+    # Beginner-friendly onboarding. Many users install via curl | bash and have
+    # no idea what to run next. Spell it out.
+    cat <<'EOF'
+
+✓ auxloclaw is ready.
+
+  3 steps to your first chat (about 2 minutes):
+
+    1.  auxloclaw setup
+        (Interactive wizard -- pick a provider, paste your API key)
+
+    2.  auxloclaw gateway
+        (Start the server in the background; prints when ready)
+
+    3.  auxloclaw chat "hello"
+        (Talk to the agent from your terminal)
+
+  Or chat immediately with the free default provider (no setup needed):
+
+    export NVIDIA_API_KEY=your-key-from-build.nvidia.com
+    auxloclaw setup --provider nvidia --api-key "$NVIDIA_API_KEY"
+    auxloclaw chat "hello"
+
+  Connect Telegram:
+    - Open Telegram, message @BotFather, send /newbot, copy the token
+    - Run: auxloclaw token set TELEGRAM_BOT_TOKEN <your-token>
+    - Restart: auxloclaw gateway
+    - Send /start to your new bot
+
+  Docs: https://github.com/Auxlo-xyz/auxloclaw
+  Report issues: https://github.com/Auxlo-xyz/auxloclaw/issues
+
+EOF
 }
 
 main "$@"

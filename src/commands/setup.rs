@@ -3,24 +3,92 @@
 use anyhow::{bail, Result};
 use dialoguer::{theme::ColorfulTheme, Input, Select, Confirm};
 use std::fs;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
+/// Non-interactive configuration values. When any field is set, the wizard
+/// skips all `dialoguer` prompts and writes a config deterministically.
+#[derive(Debug, Default, Clone)]
+pub struct NonInteractiveOptions {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub api_key: Option<String>,
+    pub telegram_token: Option<String>,
+    pub discord_token: Option<String>,
+    pub github_token: Option<String>,
+}
+
 pub fn handle_setup(quick: bool, telegram: bool, discord: bool) -> Result<()> {
+    let env_opts = NonInteractiveOptions {
+        provider: std::env::var("AUXLOCLAW_PROVIDER").ok(),
+        model: std::env::var("AUXLOCLAW_MODEL").ok(),
+        api_key: std::env::var("AUXLOCLAW_API_KEY").ok().or_else(|| {
+            // Common fallback: NVIDIA, OpenAI, Anthropic provider-specific vars
+            std::env::var("NVIDIA_API_KEY").ok()
+                .or_else(|| std::env::var("OPENAI_API_KEY").ok())
+                .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
+        }),
+        telegram_token: std::env::var("AUXLOCLAW_TELEGRAM_TOKEN").ok(),
+        discord_token: std::env::var("AUXLOCLAW_DISCORD_TOKEN").ok(),
+        github_token: std::env::var("AUXLOCLAW_GITHUB_TOKEN").ok(),
+    };
+    let has_env = env_opts.provider.is_some()
+        || env_opts.model.is_some()
+        || env_opts.api_key.is_some()
+        || env_opts.telegram_token.is_some()
+        || env_opts.discord_token.is_some()
+        || env_opts.github_token.is_some();
+    if has_env {
+        return handle_setup_with(quick, telegram, discord, env_opts);
+    }
+    handle_setup_with(quick, telegram, discord, NonInteractiveOptions::default())
+}
+
+/// Like `handle_setup` but accepts non-interactive overrides. Used when the
+/// caller has already collected config values from the user (CLI flags, env
+/// vars, or a web onboarding flow).
+pub fn handle_setup_with(
+    quick: bool,
+    telegram: bool,
+    discord: bool,
+    non_interactive: NonInteractiveOptions,
+) -> Result<()> {
     println!("\nAUXLOCLAW Setup Wizard\n");
-    
+
     let config_dir = dirs::home_dir()
         .map(|h| h.join(".auxloclaw"))
         .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
-    
+
     let config_path = config_dir.join("config.toml");
-    
+
+    // Route 1: explicit quick flag → existing quick_setup
     if quick {
         return quick_setup(&config_dir, telegram, discord);
     }
-    
+
+    // Route 2: any non-interactive option provided → build config without prompts
+    let has_non_interactive = non_interactive.provider.is_some()
+        || non_interactive.model.is_some()
+        || non_interactive.api_key.is_some()
+        || non_interactive.telegram_token.is_some()
+        || non_interactive.discord_token.is_some()
+        || non_interactive.github_token.is_some();
+    if has_non_interactive {
+        return non_interactive_setup(&config_dir, &config_path, &non_interactive);
+    }
+
+    // Route 3: TTY check. Refuse to run the interactive wizard without a
+    // terminal -- dialoguer will block forever or read EOF on EOF-only stdin.
+    if !std::io::stdin().is_terminal() {
+        return Err(bail_non_tty());
+    }
+    if !std::io::stdout().is_terminal() {
+        return Err(bail_non_tty());
+    }
+
     // Interactive setup
     println!("This wizard will help you configure AUXLOCLAW.\n");
-    
+
     // Create config directory
     if !config_dir.exists() {
         fs::create_dir_all(&config_dir)?;
@@ -367,4 +435,141 @@ timeout_secs = 30
     }
 
     config
+}
+
+fn bail_non_tty() -> anyhow::Error {
+    anyhow::anyhow!({
+        "The wizard requires a terminal. Run with: ssh -t, script(1), or set the new non-interactive flags/env vars."
+    })
+}
+
+fn non_interactive_setup(
+    config_dir: &PathBuf,
+    config_path: &PathBuf,
+    opts: &NonInteractiveOptions,
+) -> Result<()> {
+    if !config_dir.exists() {
+        fs::create_dir_all(config_dir)?;
+        fs::create_dir_all(config_dir.join("skills"))?;
+        fs::create_dir_all(config_dir.join("memory"))?;
+    }
+
+    let provider = opts.provider.as_deref().unwrap_or("nvidia");
+    let model = opts.model.as_deref().unwrap_or("stepfun-ai/step-3.5-flash");
+    let api_base = if opts.provider.as_deref() == Some("nvidia") {
+        "https://integrate.api.nvidia.com/v1"
+    } else if opts.provider.as_deref() == Some("openai") {
+        "https://api.openai.com/v1"
+    } else if opts.provider.as_deref() == Some("anthropic") {
+        "https://api.anthropic.com/v1"
+    } else if opts.provider.as_deref() == Some("openrouter") {
+        "https://openrouter.ai/api/v1"
+    } else if opts.provider.as_deref() == Some("groq") {
+        "https://api.groq.com/openai/v1"
+    } else {
+        "https://integrate.api.nvidia.com/v1"
+    };
+    let api_key = opts.api_key.as_deref().unwrap_or("");
+    let telegram_token = opts.telegram_token.as_deref();
+    let discord_token = opts.discord_token.as_deref();
+    let github_token = opts.github_token.as_deref();
+    let extra_mcp = &[];
+
+    let config = generate_config(
+        "AUXLOCLAW",
+        provider,
+        api_base,
+        model,
+        api_key,
+        1.0,
+        if telegram_token.is_some() && !telegram_token.unwrap_or("").trim().is_empty() { Some(telegram_token.unwrap()) } else { None },
+        if discord_token.is_some() && !discord_token.unwrap_or("").trim().is_empty() { Some(discord_token.unwrap()) } else { None },
+        if github_token.is_some() && !github_token.unwrap_or("").trim().is_empty() { Some(github_token.unwrap()) } else { None },
+        extra_mcp,
+    );
+
+    fs::write(config_path, &config)?;
+
+    let mut enabled_telegram = false;
+    let mut enabled_discord = false;
+    let mut enabled_github = false;
+    if telegram_token.is_some() && !telegram_token.unwrap_or("").trim().is_empty() {
+        enabled_telegram = true;
+    }
+    if discord_token.is_some() && !discord_token.unwrap_or("").trim().is_empty() {
+        enabled_discord = true;
+    }
+    if github_token.is_some() && !github_token.unwrap_or("").trim().is_empty() {
+        enabled_github = true;
+    }
+
+    println!("\nSummary:");
+    println!("  Provider: {}", provider);
+    println!("  Model: {}", model);
+    println!("  Telegram: {}", if enabled_telegram { "enabled" } else { "disabled" });
+    println!("  Discord: {}", if enabled_discord { "enabled" } else { "disabled" });
+    println!("  GitHub MCP: {}", if enabled_github { "enabled" } else { "disabled" });
+    println!("Configuration saved to {:?}", config_path);
+    println!("Next steps: Run `auxloclaw gateway` to start.");
+    if api_key.is_empty() {
+        println!("Set your API key: export NVIDIA_API_KEY=your-key");
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    fn make_opts() -> NonInteractiveOptions {
+        NonInteractiveOptions {
+            provider: Some("openai".into()),
+            model: Some("gpt-4o".into()),
+            api_key: Some("sk-test".into()),
+            telegram_token: None,
+            discord_token: None,
+            github_token: None,
+        }
+    }
+
+    #[test]
+    fn non_interactive_setup_writes_config() {
+        let tmp = env::temp_dir().join(format!("auxloclaw-setup-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let config_path = tmp.join("config.toml");
+        let opts = make_opts();
+
+        non_interactive_setup(&tmp, &config_path, &opts).expect("setup should succeed");
+
+        assert!(config_path.exists(), "config.toml must be created");
+        let body = fs::read_to_string(&config_path).unwrap();
+        assert!(body.contains("openai"), "config must contain provider name");
+        assert!(body.contains("sk-test"), "config must contain api key");
+        assert!(body.contains("gpt-4o"), "config must contain model");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn handle_setup_with_non_interactive_opts_skips_tty() {
+        // Even with stdin closed (the test harness has no TTY), passing any
+        // non-interactive option must succeed without ever calling bail_non_tty.
+        let tmp = env::temp_dir().join(format!("auxloclaw-setup-no-tty-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let config_path = tmp.join("config.toml");
+
+        let result = handle_setup_with(false, false, false, make_opts());
+        assert!(result.is_ok(), "non-interactive path must not require a TTY: {result:?}");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn bail_non_tty_message_mentions_terminal() {
+        let err = bail_non_tty();
+        let msg = err.to_string();
+        assert!(msg.contains("terminal"), "bail message must mention 'terminal', got: {msg}");
+    }
 }

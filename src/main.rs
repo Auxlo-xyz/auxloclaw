@@ -80,8 +80,22 @@ async fn main() -> anyhow::Result<()> {
             quick,
             telegram,
             discord,
+            provider,
+            model,
+            api_key,
+            telegram_token,
+            discord_token,
+            github_token,
         } => {
-            commands::setup::handle_setup(quick, telegram, discord)?;
+            let opts = commands::setup::NonInteractiveOptions {
+                provider,
+                model,
+                api_key,
+                telegram_token,
+                discord_token,
+                github_token,
+            };
+            commands::setup::handle_setup_with(quick, telegram, discord, opts)?;
         }
 
         Commands::Config { action } => {

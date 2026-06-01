@@ -47,6 +47,24 @@ pub enum Commands {
         telegram: bool,
         #[arg(long)]
         discord: bool,
+        /// Non-interactive: provider name (nvidia|openai|anthropic|...)
+        #[arg(long)]
+        provider: Option<String>,
+        /// Non-interactive: model ID (e.g. gpt-4o, claude-3, gemma-7b)
+        #[arg(long)]
+        model: Option<String>,
+        /// Non-interactive: API key for the provider
+        #[arg(long)]
+        api_key: Option<String>,
+        /// Non-interactive: Telegram bot token
+        #[arg(long)]
+        telegram_token: Option<String>,
+        /// Non-interactive: Discord bot token
+        #[arg(long)]
+        discord_token: Option<String>,
+        /// Non-interactive: GitHub token
+        #[arg(long)]
+        github_token: Option<String>,
     },
     /// Manage configuration
     Config {

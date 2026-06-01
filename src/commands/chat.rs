@@ -4,6 +4,7 @@ use crate::checkpoints::CheckpointManager;
 use crate::plugins::PluginManager;
 use anyhow::Result;
 use dialoguer;
+use std::io::IsTerminal;
 use std::sync::Arc;
 
 pub async fn handle_chat(
@@ -68,6 +69,11 @@ pub async fn handle_chat(
         }
         None => {
             // Interactive mode with history
+            if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+                return Err(anyhow::anyhow!(
+                    "Interactive mode requires a terminal. Please run this command in a terminal or redirect stdin/stdout to a terminal."
+                ));
+            }
             println!("\n🦞 AUXLOCLAW Chat (type 'exit' to quit, 'help' for commands)\n");
 
             let mut history = dialoguer::BasicHistory::new();
