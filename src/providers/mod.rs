@@ -224,6 +224,28 @@ impl ProviderPool {
             .ok_or_else(|| anyhow!("No active provider"))?;
         provider.stream(request).await
     }
+
+    /// Register a provider from explicit fields and set it as active.
+    pub async fn register_from_global(
+        &self,
+        name: &str,
+        base_url: &str,
+        api_key: &str,
+    ) {
+        let provider = OpenAICompatibleProvider::new(
+            name.to_string(),
+            api_key.to_string(),
+            base_url.to_string(),
+            self.client.clone(),
+            Some(std::collections::HashMap::new()),
+        );
+        {
+            let mut providers = self.providers.write().await;
+            providers.insert(name.to_string(), Arc::new(provider));
+        }
+        *self.active_provider.write().await = name.to_string();
+        tracing::info!("Registered and activated provider: {} @ {}", name, base_url);
+    }
 }
 
 /// Info about a provider

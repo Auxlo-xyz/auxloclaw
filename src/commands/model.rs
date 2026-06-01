@@ -151,6 +151,7 @@ pub fn handle_callback(
                     ov.base_url = None; // clear - user must provide
                     ov.updated_at = now_secs();
                     store.set(channel, user_id, &ov)?;
+                    update_config_provider(store, channel, user_id)?;
 
                     // Show sub-type keyboard: OpenAI-compatible vs Anthropic
                     let keyboard_json = custom_subtype_keyboard_json();
@@ -164,6 +165,7 @@ pub fn handle_callback(
                 ov.base_url = Some(provider.default_base.to_string());
                 ov.updated_at = now_secs();
                 store.set(channel, user_id, &ov)?;
+                update_config_provider(store, channel, user_id)?;
 
                 let msg = format!(
                     "**{} selected.**\n\n\
@@ -194,6 +196,7 @@ pub fn handle_callback(
                 ov.base_url = None;
                 ov.updated_at = now_secs();
                 store.set(channel, user_id, &ov)?;
+                update_config_provider(store, channel, user_id)?;
 
                 let msg = format!(
                     "**{label} API format selected.**\n\n\
@@ -251,6 +254,7 @@ pub fn handle_model(
             ov.base_url = Some(provider.default_base.to_string());
             ov.updated_at = now_secs();
             store.set(channel, user_id, &ov)?;
+            update_config_provider(store, channel, user_id)?;
 
             Ok(format!(
                 "Provider set to **{}**.\nDefault endpoint: {}\nNext: /model key YOUR_KEY",
@@ -268,6 +272,7 @@ pub fn handle_model(
             ov.encrypted_api_key = Some(encrypted);
             ov.updated_at = now_secs();
             store.set(channel, user_id, &ov)?;
+            update_config_provider(store, channel, user_id)?;
 
             let masked = mask_key(key);
             Ok(format!(
@@ -285,6 +290,7 @@ pub fn handle_model(
             ov.base_url = Some(url.to_string());
             ov.updated_at = now_secs();
             store.set(channel, user_id, &ov)?;
+            update_config_provider(store, channel, user_id)?;
 
             let next = if ov.encrypted_api_key.is_some() {
                 "Next: /model id MODEL_NAME".to_string()
@@ -303,6 +309,7 @@ pub fn handle_model(
             ov.model_id = Some(model_id.to_string());
             ov.updated_at = now_secs();
             store.set(channel, user_id, &ov)?;
+            update_config_provider(store, channel, user_id)?;
 
             let summary = build_summary("telegram", user_id, &ov);
             Ok(format!("Model ID updated to **{}**.\n\n{}", model_id, summary))
@@ -314,6 +321,7 @@ pub fn handle_model(
                 ov.model_id = Some(args.to_string());
                 ov.updated_at = now_secs();
                 store.set(channel, user_id, &ov)?;
+                update_config_provider(store, channel, user_id)?;
                 return Ok(format!("Model ID updated to **{}**.", args));
             }
             Ok(format!("Unknown option: {}\n\n{}", args, format_help()))
@@ -437,6 +445,90 @@ pub fn resolve_user_model(
         }
         None => Ok((None, None, None, None)),
     }
+}
+
+/// Sync the user's current model override into ~/.auxloclaw/config.toml
+/// as the single global provider. This is the ONLY place provider config lives.
+/// After this call, a restart will pick up the new provider automatically,
+/// and for the current session the ProviderPool is updated at runtime.
+pub fn update_config_provider(
+    store: &ModelStore,
+    channel: &str,
+    user_id: &str,
+) -> Result<()> {
+    let ov = match store.get(channel, user_id)? {
+        Some(ov) => ov,
+        None => return Ok(()),
+    };
+
+    // Need at least a base_url and api_key to write a provider
+    let base_url = match &ov.base_url {
+        Some(u) if !u.is_empty() => u.clone(),
+        _ => return Ok(()),
+    };
+    let api_key = match &ov.encrypted_api_key {
+        Some(enc) => store.decrypt_key(enc)?,
+        None => return Ok(()),
+    };
+    let provider_type = ov.provider_type.clone().unwrap_or_else(|| "openai".into());
+    let model_id = ov.model_id.clone().unwrap_or_else(|| "".into());
+
+    let config_path = dirs::home_dir()
+        .map(|h| h.join(".auxloclaw/config.toml"))
+        .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
+
+    // Read existing config or start fresh
+    let mut doc: toml::Value = if config_path.exists() {
+        let raw = std::fs::read_to_string(&config_path)?;
+        toml::from_str(&raw).unwrap_or_else(|_| toml::Value::Table(Default::default()))
+    } else {
+        toml::Value::Table(Default::default())
+    };
+
+    // Build the provider entry
+    let name = provider_type.clone();
+    let entry = toml::Value::Table({
+        let mut t = toml::map::Map::new();
+        t.insert("name".into(), toml::Value::String(name.clone()));
+        t.insert("api_key".into(), toml::Value::String(api_key));
+        t.insert("api_base".into(), toml::Value::String(base_url));
+        t
+    });
+
+    // Update [providers] section
+    let providers_table = doc.as_table_mut()
+        .unwrap()
+        .entry("providers".to_string())
+        .or_insert_with(|| toml::Value::Table(Default::default()))
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("[providers] is not a table"))?;
+
+    providers_table.insert("active".to_string(), toml::Value::String(name.clone()));
+    providers_table.insert("providers".to_string(), toml::Value::Array(vec![entry]));
+
+    // Update default model in [agent] section
+    if !model_id.is_empty() {
+        let agent_table = doc.as_table_mut()
+            .unwrap()
+            .entry("agent".to_string())
+            .or_insert_with(|| toml::Value::Table(Default::default()))
+            .as_table_mut()
+            .ok_or_else(|| anyhow::anyhow!("[agent] is not a table"))?;
+        agent_table.insert("default_model".to_string(), toml::Value::String(model_id));
+    }
+
+    let rendered = toml::to_string_pretty(&doc)?;
+    std::fs::write(&config_path, &rendered)?;
+
+    // Tighten permissions (config now contains an API key)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600));
+    }
+
+    tracing::info!("Updated config.toml with provider '{}'", name);
+    Ok(())
 }
 
 pub fn now_secs() -> u64 {
