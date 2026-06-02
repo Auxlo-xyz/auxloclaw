@@ -59,7 +59,7 @@ pub enum Command {
     Model(String),
     #[command(description = "Manage MCP server integrations")]
     Mcp(String),
-    #[command(description = "Manage API tokens for MCP servers")]
+    #[command(description = "Manage secure API tokens")]
     Token(String),
 }
 
@@ -758,7 +758,7 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
              \u{2022} /model \u{2014} choose your AI provider\n\
              \u{2022} /help \u{2014} see all commands\n\
              \u{2022} /status \u{2014} check my status\n\
-             \u{2022} /token set <KEY> <value> \u{2014} set up your API keys\n\n\
+             \u{2022} /token set <name> <value> — store a secure API token\n\n\
              \u{26a1} I am ready when you are!"
         );
         send_markdown_message(
@@ -791,7 +791,7 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<TelegramState>) -> Re
     // Auto-delete messages containing secrets
     if !text.is_empty() && crate::commands::token::contains_secret(text) {
         let _ = bot.delete_message(teloxide::types::ChatId(chat_id), msg.id).await;
-        send_markdown_message(&bot, chat_id, "Your message was deleted for security (it contained a token/secret). Use `/token set <server> <KEY> <value>` to store tokens safely.").await?;
+        send_markdown_message(&bot, chat_id, "Your message was deleted for security (it contained a token/secret). Use `/token set <name> <value>` to store tokens safely.").await?;
         return Ok(());
     }
 

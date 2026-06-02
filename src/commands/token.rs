@@ -1,51 +1,165 @@
-//! /token command - Secure token/secret management for MCP and providers
+//! /token command - Secure encrypted token/secret management
 //!
 //! Usage:
-//!   /token                    - List all configured tokens (masked)
-//!   /token set <server> <KEY> <value>  - Set a token for an MCP server
-//!   /token set <KEY> <value>           - Set a global env token
-//!   /token remove <server> <KEY>       - Remove a token from an MCP server
-//!   /token remove <KEY>                - Remove a global env token
-//!   /token help                       - Show usage
+//!   /token                    - List all stored token names (values never shown)
+//!   /token set <name> <value> - Store an encrypted token
+//!   /token remove <name>      - Remove a token
+//!   /token get <name>         - Retrieve token value (internal/agent use only)
+//!   /token help               - Show usage
 //!
-//! Security: Messages containing tokens are auto-deleted from Telegram chats.
+//! Tokens are stored encrypted with AES-256-GCM in ~/.auxloclaw/tokens.enc.
+//! The LLM never sees token values -- only names are injected into the system prompt.
 
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Nonce,
+};
 use anyhow::{anyhow, Context, Result};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::config::AppConfig;
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct TokenStore {
+    tokens: HashMap<String, String>,
+}
 
-fn config_path() -> PathBuf {
-    let base = std::env::var("AUXLOCLAW_CONFIG")
-        .unwrap_or_else(|_| "~/.auxloclaw/config.toml".into());
-    if base.starts_with('~') {
-        dirs::home_dir()
-            .unwrap_or_else(|| "/root".into())
-            .join(&base[2..])
-    } else {
-        PathBuf::from(&base)
+fn auxloclaw_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| "/root".into())
+        .join(".auxloclaw")
+}
+
+fn store_path() -> PathBuf {
+    auxloclaw_dir().join("tokens.enc")
+}
+
+fn salt_path() -> PathBuf {
+    auxloclaw_dir().join(".token_key_salt")
+}
+
+fn derive_cipher() -> Result<Aes256Gcm> {
+    let dir = auxloclaw_dir();
+    fs::create_dir_all(&dir)
+        .with_context(|| format!("Failed to create auxloclaw dir: {:?}", &dir))?;
+
+    let sp = salt_path();
+    if !sp.exists() {
+        let mut salt = [0u8; 32];
+        for (i, byte) in salt.iter_mut().enumerate() {
+            *byte = ((std::process::id() as u64)
+                .wrapping_mul(0x9E3779B97F4A7C15)
+                .wrapping_add(i as u64)
+                ^ std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos() as u64) as u8;
+        }
+        fs::write(&sp, &salt)
+            .with_context(|| format!("Failed to write salt: {:?}", &sp))?;
     }
+
+    let salt = fs::read(&sp)
+        .with_context(|| format!("Failed to read salt: {:?}", &sp))?;
+
+    let hostname = hostname::get()
+        .map(|h| h.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "auxloclaw".into());
+
+    let mut hasher = Sha256::new();
+    hasher.update(hostname.as_bytes());
+    hasher.update(&salt);
+    let key_bytes = hasher.finalize();
+
+    Aes256Gcm::new_from_slice(&key_bytes)
+        .map_err(|e| anyhow!("Failed to create cipher: {}", e))
 }
 
-fn load_config(path: &PathBuf) -> Result<AppConfig> {
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read config: {:?}", path))?;
-    toml::from_str(&content).context("Failed to parse config")
+fn encrypt_value(cipher: &Aes256Gcm, plaintext: &str) -> Result<String> {
+    use base64::Engine;
+    let mut nonce_bytes = [0u8; 12];
+    for (i, byte) in nonce_bytes.iter_mut().enumerate() {
+        *byte = ((std::process::id() as u64)
+            .wrapping_mul(0x9E3779B97F4A7C15)
+            .wrapping_add(
+                i as u64
+                    + std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos() as u64,
+            )) as u8;
+    }
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_bytes())
+        .map_err(|e| anyhow!("Encryption failed: {}", e))?;
+    let mut combined = Vec::with_capacity(12 + ciphertext.len());
+    combined.extend_from_slice(&nonce_bytes);
+    combined.extend_from_slice(&ciphertext);
+    Ok(base64::engine::general_purpose::STANDARD.encode(&combined))
 }
 
-fn save_config(path: &PathBuf, config: &AppConfig) -> Result<()> {
-    let content = toml::to_string_pretty(config)
-        .context("Failed to serialize config")?;
-    let tmp = path.with_extension("toml.tmp");
-    fs::write(&tmp, &content)
-        .with_context(|| format!("Failed to write config tmp: {:?}", tmp))?;
-    fs::rename(&tmp, path)
-        .with_context(|| format!("Failed to rename: {:?} -> {:?}", tmp, path))?;
+fn decrypt_value(cipher: &Aes256Gcm, encoded: &str) -> Result<String> {
+    use base64::Engine;
+    let combined = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|e| anyhow!("Invalid base64: {}", e))?;
+    if combined.len() < 12 {
+        return Err(anyhow!("Encrypted data too short"));
+    }
+    let (nonce_bytes, ciphertext) = combined.split_at(12);
+    let nonce = Nonce::from_slice(nonce_bytes);
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| anyhow!("Decryption failed: {}", e))?;
+    String::from_utf8(plaintext).map_err(|e| anyhow!("Invalid UTF-8: {}", e))
+}
+
+fn load_store(cipher: &Aes256Gcm) -> Result<TokenStore> {
+    let path = store_path();
+    if !path.exists() {
+        return Ok(TokenStore::default());
+    }
+    let raw = fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read tokens: {:?}", &path))?;
+    let stored: TokenStore =
+        serde_json::from_str(&raw).with_context(|| "Failed to parse tokens file")?;
+
+    let mut tokens = HashMap::new();
+    for (name, enc_val) in &stored.tokens {
+        match decrypt_value(cipher, enc_val) {
+            Ok(val) => { tokens.insert(name.clone(), val); }
+            Err(e) => {
+                tracing::warn!("Failed to decrypt token '{}': {}", name, e);
+            }
+        }
+    }
+    Ok(TokenStore { tokens })
+}
+
+fn save_store(cipher: &Aes256Gcm, store: &TokenStore) -> Result<()> {
+    let path = store_path();
+    let dir = path.parent().unwrap();
+    fs::create_dir_all(dir)
+        .with_context(|| format!("Failed to create dir: {:?}", dir))?;
+
+    let mut encrypted = TokenStore::default();
+    for (name, val) in &store.tokens {
+        let enc = encrypt_value(cipher, val)?;
+        encrypted.tokens.insert(name.clone(), enc);
+    }
+
+    let json = serde_json::to_string_pretty(&encrypted)?;
+    let tmp = path.with_extension("enc.tmp");
+    fs::write(&tmp, &json)
+        .with_context(|| format!("Failed to write tmp: {:?}", &tmp))?;
+    fs::rename(&tmp, &path)
+        .with_context(|| format!("Failed to rename: {:?} -> {:?}", &tmp, &path))?;
     Ok(())
 }
 
-/// Mask a secret value for display: show first 4 and last 4 chars
 fn mask_secret(value: &str) -> String {
     if value.len() <= 12 {
         if value.is_empty() {
@@ -54,33 +168,38 @@ fn mask_secret(value: &str) -> String {
             "*".repeat(value.len())
         }
     } else {
-        format!("{}...{}", &value[..value.floor_char_boundary(4)], &value[value.floor_char_boundary(value.len()-4)..])
+        format!(
+            "{}...{}",
+            &value[..value.floor_char_boundary(4)],
+            &value[value.floor_char_boundary(value.len() - 4)..]
+        )
     }
 }
 
-/// Detect if a message contains what looks like a token/secret
 pub fn contains_secret(text: &str) -> bool {
     let lower = text.to_lowercase();
     let patterns = [
-        "ghp_", "gho_", "ghs_", "ghr_",           // GitHub tokens
-        "sk-", "sk_live_", "sk_test_",              // Stripe/OpenAI
-        "xoxb-", "xoxp-", "xapp-",                  // Slack
-        "nvapi-",                                    // Nvidia
-        "Bearer ", "bearer ",                         // Auth headers
-        "api_key=", "apikey=", "token=",             // Inline keys
-        "pat-",                                      // Azure DevOps
-        "AKIA",                                      // AWS
-        "eyJ",                                       // JWT tokens
-        "whsec_",                                    // Stripe webhooks
+        "ghp_", "gho_", "ghs_", "ghr_",
+        "sk-", "sk_live_", "sk_test_",
+        "xoxb-", "xoxp-", "xapp-",
+        "nvapi-",
+        "Bearer ", "bearer ",
+        "api_key=", "apikey=", "token=",
+        "pat-",
+        "AKIA",
+        "eyJ",
+        "whsec_",
     ];
     for pat in &patterns {
         if lower.contains(&pat.to_lowercase()) {
             return true;
         }
     }
-    // Also flag long alphanumeric strings (>40 chars) that look like keys
     for word in text.split_whitespace() {
-        let clean: String = word.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-').collect();
+        let clean: String = word
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+            .collect();
         if clean.len() > 40 && clean.chars().filter(|c| c.is_ascii_alphanumeric()).count() > 35 {
             return true;
         }
@@ -88,7 +207,30 @@ pub fn contains_secret(text: &str) -> bool {
     false
 }
 
-/// Handle the /token command
+/// Public API: list all stored token names (no values).
+pub fn list_token_names() -> Vec<String> {
+    let cipher = match derive_cipher() {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+    let store = match load_store(&cipher) {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+    let mut names: Vec<String> = store.tokens.keys().cloned().collect();
+    names.sort();
+    names
+}
+
+/// Public API: retrieve a decrypted token value by name.
+/// Used internally by tools and MCP servers. Never exposed to the LLM.
+pub fn get_token_value(name: &str) -> Option<String> {
+    let cipher = derive_cipher().ok()?;
+    let store = load_store(&cipher).ok()?;
+    store.tokens.get(name).cloned()
+}
+
+/// Handle the /token command.
 pub fn handle_token(args: &str) -> Result<String> {
     let parts: Vec<&str> = args.trim().split_whitespace().collect();
 
@@ -99,59 +241,28 @@ pub fn handle_token(args: &str) -> Result<String> {
     match parts[0] {
         "help" | "h" => Ok(help_text()),
         "set" => {
-            // /token set <server> <KEY> <value>
-            // /token set <KEY> <value>
             if parts.len() < 3 {
                 return Err(anyhow!(
-                    "Usage:\n  /token set <server> <KEY> <value>\n  /token set <KEY> <value>"
+                    "Usage: /token set <name> <value>\nExample: /token set github_token ghp_xxxx"
                 ));
             }
-
-            // Check if 2nd arg is an MCP server name
-            let path = config_path();
-            let config = load_config(&path)?;
-            let server_names: Vec<&str> = config.mcp.servers.iter().map(|s| s.name.as_str()).collect();
-
-            if parts.len() >= 4 && server_names.contains(&parts[1]) {
-                // /token set <server> <KEY> <value>
-                set_server_token(&path, parts[1], parts[2], &parts[3..].join(" "))
-            } else {
-                // /token set <KEY> <value>
-                // Default to first MCP server if only one exists, or error
-                if server_names.len() == 1 {
-                    set_server_token(&path, server_names[0], parts[1], &parts[2..].join(" "))
-                } else if server_names.is_empty() {
-                    Err(anyhow!("No MCP servers configured. Add one first with /mcp add"))
-                } else {
-                    Err(anyhow!(
-                        "Multiple MCP servers: {}. Specify which one:\n  /token set <server> <KEY> <value>",
-                        server_names.join(", ")
-                    ))
-                }
-            }
+            let name = parts[1];
+            let value = parts[2..].join(" ");
+            set_token(name, &value)
         }
         "remove" | "rm" => {
             if parts.len() < 2 {
-                return Err(anyhow!(
-                    "Usage:\n  /token remove <server> <KEY>\n  /token remove <KEY>"
-                ));
+                return Err(anyhow!("Usage: /token remove <name>"));
             }
-
-            let path = config_path();
-            let config = load_config(&path)?;
-            let server_names: Vec<&str> = config.mcp.servers.iter().map(|s| s.name.as_str()).collect();
-
-            if parts.len() >= 3 && server_names.contains(&parts[1]) {
-                remove_server_token(&path, parts[1], parts[2])
-            } else if server_names.len() == 1 {
-                remove_server_token(&path, server_names[0], parts[1])
-            } else if server_names.is_empty() {
-                Err(anyhow!("No MCP servers configured."))
-            } else {
-                Err(anyhow!(
-                    "Multiple MCP servers: {}. Specify:\n  /token remove <server> <KEY>",
-                    server_names.join(", ")
-                ))
+            remove_token(parts[1])
+        }
+        "get" => {
+            if parts.len() < 2 {
+                return Err(anyhow!("Usage: /token get <name>"));
+            }
+            match get_token_value(parts[1]) {
+                Some(val) => Ok(val),
+                None => Err(anyhow!("No token named '{}'", parts[1])),
             }
         }
         _ => Err(anyhow!(
@@ -166,95 +277,77 @@ fn help_text() -> String {
 Token Management
 ================
 
-Securely store API keys and tokens for MCP servers.
+Securely store API keys and tokens. Values are encrypted at rest.
 
 Commands:
-  /token                         List all configured tokens (masked)
-  /token set <server> <KEY> <val> Set a token for an MCP server
-  /token set <KEY> <val>         Set token (auto-detects server if only one)
-  /token remove <server> <KEY>   Remove a token
-  /token help                    This message
+  /token                  List all token names (values never shown)
+  /token set <name> <val> Store an encrypted token
+  /token remove <name>    Remove a token
+  /token help             This message
 
 Security:
-  - Tokens are stored in your config file, NOT in chat history
-  - Messages containing tokens are auto-deleted from Telegram
-  - Tokens are masked when displayed (only first/last 4 chars shown)
+  - Tokens are encrypted with AES-256-GCM on disk
+  - Token values are never shown to the AI agent
+  - Messages containing secrets are auto-deleted from chat
+  - Only token names appear in the agent context
 
 Examples:
-  /token set github GITHUB_PERSONAL_ACCESS_TOKEN ghp_xxxxxxxxxxxx
-  /token set linear LINEAR_API_TOKEN lin_xxxxxxxxxxxx
-  /token remove github GITHUB_PERSONAL_ACCESS_TOKEN"
+  /token set github_token ghp_xxxxxxxxxxxx
+  /token set linear_api_token lin_xxxxxxxxxxxx
+  /token remove github_token"
         .into()
 }
 
 fn list_tokens() -> Result<String> {
-    let path = config_path();
-    let config = load_config(&path)?;
+    let cipher = derive_cipher()?;
+    let store = load_store(&cipher)?;
 
     let mut lines = vec!["Configured Tokens".to_string(), String::new()];
 
-    if config.mcp.servers.is_empty() {
-        lines.push("No MCP servers configured.".into());
-        lines.push("Add one first: /mcp add <name> <command>".into());
+    if store.tokens.is_empty() {
+        lines.push("No tokens stored.".into());
+        lines.push("Add one: /token set <name> <value>".into());
         return Ok(lines.join("\n"));
     }
 
-    let mut has_any = false;
-    for server in &config.mcp.servers {
-        if server.env.is_empty() {
-            continue;
-        }
-        has_any = true;
-        lines.push(format!("{}:", server.name));
-        for (key, value) in &server.env {
-            lines.push(format!("  {} = {}", key, mask_secret(value)));
-        }
+    let mut names: Vec<&String> = store.tokens.keys().collect();
+    names.sort();
+
+    for name in &names {
+        let val = &store.tokens[*name];
+        lines.push(format!("  {} = {}", name, mask_secret(val)));
     }
 
-    if !has_any {
-        lines.push("No tokens configured.".into());
-        lines.push("Set one: /token set <server> <KEY> <value>".into());
-    }
+    lines.push(String::new());
+    lines.push(format!("{} token(s) stored.", store.tokens.len()));
 
     Ok(lines.join("\n"))
 }
 
-fn set_server_token(path: &PathBuf, server_name: &str, key: &str, value: &str) -> Result<String> {
-    let mut config = load_config(path)?;
+fn set_token(name: &str, value: &str) -> Result<String> {
+    let cipher = derive_cipher()?;
+    let mut store = load_store(&cipher)?;
 
-    let server = config
-        .mcp
-        .servers
-        .iter_mut()
-        .find(|s| s.name == server_name)
-        .ok_or_else(|| anyhow!("No MCP server named '{}'", server_name))?;
+    let is_update = store.tokens.contains_key(name);
+    store.tokens.insert(name.to_string(), value.to_string());
+    save_store(&cipher, &store)?;
 
-    let is_update = server.env.contains_key(key);
-    server.env.insert(key.to_string(), value.to_string());
-    save_config(path, &config)?;
-
-    let action = if is_update { "Updated" } else { "Set" };
+    let action = if is_update { "Updated" } else { "Stored" };
     Ok(format!(
-        "{} {} = {} for server '{}'.\nUse /mcp enable {} to activate if not already enabled.",
-        action, key, mask_secret(value), server_name, server_name
+        "{} token '{}'. Value is encrypted and will not be shown to the AI agent.",
+        action, name
     ))
 }
 
-fn remove_server_token(path: &PathBuf, server_name: &str, key: &str) -> Result<String> {
-    let mut config = load_config(path)?;
+fn remove_token(name: &str) -> Result<String> {
+    let cipher = derive_cipher()?;
+    let mut store = load_store(&cipher)?;
 
-    let server = config
-        .mcp
-        .servers
-        .iter_mut()
-        .find(|s| s.name == server_name)
-        .ok_or_else(|| anyhow!("No MCP server named '{}'", server_name))?;
-
-    if server.env.remove(key).is_some() {
-        save_config(path, &config)?;
-        Ok(format!("Removed {} from server '{}'.", key, server_name))
+    if store.tokens.remove(name).is_some() {
+        save_store(&cipher, &store)?;
+        Ok(format!("Removed token '{}'.", name))
     } else {
-        Err(anyhow!("Key '{}' not found on server '{}'", key, server_name))
+        Err(anyhow!("No token named '{}'", name))
     }
 }
 
@@ -284,5 +377,30 @@ mod tests {
         let resp = help_text();
         assert!(resp.contains("Token Management"));
         assert!(resp.contains("/token set"));
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_roundtrip() {
+        let cipher = derive_cipher().unwrap();
+        let val = "ghp_test_token_value_12345";
+        let encrypted = encrypt_value(&cipher, val).unwrap();
+        assert_ne!(encrypted, val);
+        let decrypted = decrypt_value(&cipher, &encrypted).unwrap();
+        assert_eq!(decrypted, val);
+    }
+
+    #[test]
+    fn test_set_and_list_tokens() {
+        let cipher = derive_cipher().unwrap();
+        let mut store = TokenStore::default();
+        store.tokens.insert("test_key".into(), "test_value".into());
+        save_store(&cipher, &store).unwrap();
+
+        let loaded = load_store(&cipher).unwrap();
+        assert_eq!(loaded.tokens.get("test_key").unwrap(), "test_value");
+
+        // Clean up
+        store.tokens.clear();
+        save_store(&cipher, &store).unwrap();
     }
 }

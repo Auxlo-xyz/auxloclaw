@@ -166,9 +166,9 @@ pub enum Commands {
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
     },
-    /// Manage API tokens for MCP servers
+    /// Manage secure API tokens
     Token {
-        /// Token subcommand and args (e.g. "set github KEY value")
+        /// Token subcommand and args (e.g. "set github_token ghp_xxxx")
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
     },

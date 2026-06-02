@@ -189,7 +189,7 @@ impl EventHandler for DiscordHandler {
                 // Auto-delete messages containing secrets
                 if crate::commands::token::contains_secret(&content_clone) {
                     let _ = msg.delete(&http).await;
-                    if let Err(e) = msg_channel.say(&http, "Your message was deleted for security (it contained a token/secret). Use `/token set <server> <KEY> <value>` to store tokens safely.").await {
+                    if let Err(e) = msg_channel.say(&http, "Your message was deleted for security (it contained a token/secret). Use `/token set <name> <value>` to store tokens safely.").await {
                         error!("Failed to send security warning: {}", e);
                     }
                     return;

@@ -966,6 +966,18 @@ impl AgentCore {
             }
         }
 
+        // Inject available token names (never values)
+        let token_names = crate::commands::token::list_token_names();
+        if !token_names.is_empty() {
+            prompt.push_str("\n\n## Available Tokens\n");
+            prompt.push_str("The following named tokens are securely stored. You know their names but never their values. ");
+            prompt.push_str("Never attempt to display, log, guess, or reveal token values. ");
+            prompt.push_str("When the user asks to manage tokens, guide them through `/token set <name> <value>` or `/token remove <name>`.\n");
+            for name in &token_names {
+                prompt.push_str(&format!("- `{}`\n", name));
+            }
+        }
+
         // Inject cross-session memory context
         if self.config.memory.context_index_enabled {
             if let Some(ref ms) = self.memory_store {
