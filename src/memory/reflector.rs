@@ -262,12 +262,15 @@ Fields:
 - approachThatFailed: the strategy that backfired -- something you should never repeat
 - behavioralNote: if the user corrected you, got frustrated, or pushed back, what you need to do differently
 - evidence: the specific conversation moments that support your recollection
+- facts: array of {key, value} objects for any concrete facts worth remembering (e.g. API endpoints, config values, names, preferences). Empty array if none.
+- observations: array of strings for notable things observed about the user, their environment, or their work patterns. Empty array if none.
+- preferences: array of {category, preference, confidence} objects for user preferences you detected (confidence 0.0-1.0). Empty array if none.
 
 Be concrete. "Install agent-browser" is useful. "Fix the issue" is not.
 
 If the user said "stop doing X" or "don't format like Y", that goes in behavioralNote -- it's the most important kind of memory.
 
-If nothing meaningful happened, return {"type":"other","title":"No significant learning","completed":"true"}
+If nothing meaningful happened, return {"type":"other","title":"No significant learning","completed":"true","facts":[],"observations":[],"preferences":[]}
 
 Conversation:
 "#,
@@ -395,6 +398,9 @@ Conversation:
             message_count,
             created_at: now,
         };
+
+        // Extract and store facts, observations, preferences from the reflection
+        self.store_extracted_items(&parsed, session_id, now);
 
         Ok(reflection)
     }
@@ -547,6 +553,73 @@ Conversation:
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Extract and store facts, observations, and preferences from a parsed reflection
+    fn store_extracted_items(&self, parsed: &serde_json::Value, session_id: &str, now: u64) {
+        if let Some(ref store) = self.store {
+            // Store facts
+            if let Some(facts_arr) = parsed["facts"].as_array() {
+                for fact in facts_arr {
+                    let key = fact["key"].as_str().unwrap_or_default();
+                    let value = fact["value"].as_str().unwrap_or_default();
+                    if !key.is_empty() && !value.is_empty() {
+                        if let Err(e) = store.set_fact(key, value, Some("reflection")) {
+                            tracing::warn!("Failed to store extracted fact '{}': {}", key, e);
+                        }
+                    }
+                }
+            }
+
+            // Store observations
+            if let Some(obs_arr) = parsed["observations"].as_array() {
+                for obs in obs_arr {
+                    let title = obs["title"].as_str().unwrap_or_default();
+                    let narrative = obs["narrative"].as_str().unwrap_or_default();
+                    if !title.is_empty() && !narrative.is_empty() {
+                        let observation = super::store::Observation {
+                            id: None,
+                            session_id: session_id.to_string(),
+                            obs_type: obs["type"].as_str().unwrap_or("general").to_string(),
+                            title: title.to_string(),
+                            narrative: narrative.to_string(),
+                            facts: obs["facts"].as_str().map(|s| s.to_string()),
+                            concepts: obs["concepts"].as_str().map(|s| s.to_string()),
+                            files: obs["files"].as_str().map(|s| s.to_string()),
+                            tool_name: None,
+                            created_at: now,
+                        };
+                        if let Err(e) = store.insert_observation(&observation) {
+                            tracing::warn!("Failed to store extracted observation '{}': {}", title, e);
+                        }
+                    }
+                }
+            }
+
+            // Store preferences
+            if let Some(prefs_arr) = parsed["preferences"].as_array() {
+                for pref in prefs_arr {
+                    let category = pref["category"].as_str().unwrap_or("general");
+                    let preference = pref["preference"].as_str().unwrap_or_default();
+                    let confidence = pref["confidence"].as_f64().unwrap_or(0.8);
+                    if !preference.is_empty() {
+                        let record = super::store::UserPreference {
+                            id: None,
+                            user_id: None,
+                            category: category.to_string(),
+                            preference: preference.to_string(),
+                            confidence,
+                            source: Some("reflection".to_string()),
+                            last_reinforced: now,
+                            created_at: now,
+                        };
+                        if let Err(e) = store.upsert_preference(&record) {
+                            tracing::warn!("Failed to store extracted preference '{}': {}", preference, e);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Save reflection to SQLite (single source of truth)
