@@ -1,95 +1,201 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Self-healing entrypoint for auxloclaw service.
+# Self-healing entrypoint for auxloclaw.
 #
-# On container runtime resets, ephemeral filesystems (like /usr/local/bin) get
-# wiped. This wrapper detects the missing binary and auto-reinstalls from
-# GitHub Releases before running the requested command.
+# Solves TWO problems on container runtime resets:
+#   1. Binary at /usr/local/bin/auxloclaw gets wiped -> auto-reinstall
+#   2. User data at ~/.auxloclaw gets wiped           -> auto-persist via symlink
 #
-# Works for any user, any container environment. No hardcoded paths beyond
-# the install location. Passes all arguments through to the binary.
-#
-# Usage (as service entrypoint):
-#   /usr/local/bin/auxloclaw_entrypoint.sh gateway --port 18789
-#   /usr/local/bin/auxloclaw_entrypoint.sh chat "hello"
+# Zero-config: detects persistent storage automatically.
+# Works on Zo, Docker, K8s, bare metal -- any container runtime.
 
 REPO="Auxlo-xyz/auxloclaw"
 BINARY="auxloclaw"
-INSTALL_DIR="${AUXLOCLAW_INSTALL_DIR:-/usr/local/bin}"
+INSTALL_DIR="/usr/local/bin"
 INSTALL_PATH="${INSTALL_DIR}/${BINARY}"
-MAX_RETRIES=3
-RETRY_DELAY=2
+LOCKFILE="/tmp/auxloclaw_entrypoint.lock"
 
 log() {
-    printf '[auxloclaw-entrypoint] %s %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" >&2
+    printf '[auxloclaw] %s %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" >&2
 }
 
-detect_target() {
+# ── Binary recovery ──────────────────────────────────────────────────────────
+
+detect_platform() {
     local os arch
     os="$(uname -s)"
     arch="$(uname -m)"
     case "$os" in
         Linux)  os="unknown-linux-musl" ;;
         Darwin) os="apple-darwin" ;;
-        *) log "Unsupported OS: $os"; return 1 ;;
+        *) log "Unsupported OS: $os"; exit 1 ;;
     esac
     case "$arch" in
         x86_64)  arch="x86_64" ;;
         aarch64|arm64) arch="aarch64" ;;
-        *) log "Unsupported architecture: $arch"; return 1 ;;
+        *) log "Unsupported arch: $arch"; exit 1 ;;
     esac
     echo "${arch}-${os}"
 }
 
 ensure_binary() {
-    if [ -x "$INSTALL_PATH" ]; then
-        return 0
+    [ -x "$INSTALL_PATH" ] && return 0
+
+    log "Binary missing at ${INSTALL_PATH} -- reinstalling after container reset"
+
+    exec 9>"$LOCKFILE"
+    if ! flock -n 9; then
+        log "Another install in progress, waiting..."
+        flock 9
+        [ -x "$INSTALL_PATH" ] && return 0
     fi
 
-    log "Binary not found at ${INSTALL_PATH}, reinstalling..."
+    local target url tmp
+    target="$(detect_platform)"
+    url="https://github.com/${REPO}/releases/latest/download/${BINARY}-${target}"
+    tmp="/tmp/${BINARY}.install.$$"
 
-    local target
-    target="$(detect_target)" || exit 1
+    log "Downloading ${BINARY} for ${target}..."
+    if ! curl -fsSL "$url" -o "$tmp"; then
+        log "ERROR: Download failed from ${url}"
+        rm -f "$tmp"
+        exit 1
+    fi
 
-    local url="https://github.com/${REPO}/releases/latest/download/${BINARY}-${target}"
-    local tmp_path="/tmp/${BINARY}.entrypoint.$$"
-    local attempt=0
+    chmod +x "$tmp"
+    if ! "$tmp" --version >/dev/null 2>&1; then
+        log "ERROR: Downloaded binary failed --version check"
+        rm -f "$tmp"
+        exit 1
+    fi
 
-    while [ "$attempt" -lt "$MAX_RETRIES" ]; do
-        attempt=$((attempt + 1))
-        log "Download attempt ${attempt}/${MAX_RETRIES}: ${url}"
+    mkdir -p "$INSTALL_DIR"
+    mv "$tmp" "$INSTALL_PATH"
+    log "Installed: $($INSTALL_PATH --version)"
+}
 
-        if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$tmp_path" 2>/dev/null; then
-            chmod +x "$tmp_path"
+# ── Data persistence ─────────────────────────────────────────────────────────
+#
+# On container reset, ~/.auxloclaw (config, memory DB, reflections, tokens,
+# sessions) is wiped if it lives on the ephemeral root filesystem.
+#
+# Fix: symlink ~/.auxloclaw to a directory on the first persistent mount we
+# find.  The binary keeps writing to ~/.auxloclaw -- it doesn't know or care
+# that it's a symlink.  No code changes needed in the Rust binary.
+#
+# Detection order:
+#   1. AUXLOCLAW_HOME env var (explicit user override -- highest priority)
+#   2. Already a symlink?  User configured it themselves -- leave it alone.
+#   3. Probe well-known persistent mount points:
+#        /home/workspace  (Zo Computer)
+#        /data            (Docker convention)
+#        /mnt/data        (K8s PVC common)
+#        /srv/auxloclaw   (FHS-compliant)
+#        /persistent      (generic)
+#      First one that is writable AND on a different device than / wins.
+#   4. Fall back to $HOME/.auxloclaw as-is (bare metal, persistent home).
 
-            # Verify the downloaded binary runs
-            if "$tmp_path" --version >/dev/null 2>&1; then
-                mkdir -p "$INSTALL_DIR"
-                mv "$tmp_path" "$INSTALL_PATH"
-                log "Installed: $($INSTALL_PATH --version)"
-                return 0
-            else
-                log "WARNING: Downloaded binary failed verification"
-                rm -f "$tmp_path"
-            fi
-        else
-            log "WARNING: Download attempt ${attempt} failed"
-            rm -f "$tmp_path"
-        fi
+find_persistent_root() {
+    # If user explicitly set AUXLOCLAW_HOME, we still symlink but to that target.
+    # However if they set it, they likely manage persistence themselves -- skip.
+    if [ -n "${AUXLOCLAW_HOME:-}" ]; then
+        echo ""
+        return
+    fi
 
-        if [ "$attempt" -lt "$MAX_RETRIES" ]; then
-            log "Retrying in ${RETRY_DELAY}s..."
-            sleep "$RETRY_DELAY"
+    local root_dev
+    root_dev="$(stat -c %d / 2>/dev/null || echo 0)"
+
+    local candidates="/home/workspace /data /mnt/data /srv/auxloclaw /persistent"
+    for mount in $candidates; do
+        [ -d "$mount" ] || continue
+        # Check it's writable
+        [ -w "$mount" ] || continue
+        # Check it's on a different filesystem than /  (i.e. a volume mount)
+        local mount_dev
+        mount_dev="$(stat -c %d "$mount" 2>/dev/null || echo 0)"
+        if [ "$mount_dev" != "$root_dev" ]; then
+            echo "$mount"
+            return
         fi
     done
 
-    log "ERROR: Failed to install ${BINARY} after ${MAX_RETRIES} attempts"
-    exit 1
+    # Same-device fallback: if /home/workspace exists and is writable, prefer it
+    # even if it's the same device (Zo puts workspace on the root 9p fs but it
+    # IS persistent).
+    for mount in /home/workspace; do
+        if [ -d "$mount" ] && [ -w "$mount" ]; then
+            echo "$mount"
+            return
+        fi
+    done
+
+    echo ""
 }
 
-# Ensure binary exists (install if missing -- covers container reset)
-ensure_binary
+persist_data_dir() {
+    local home_auxlo="${HOME}/.auxloclaw"
 
-# Pass all arguments to the real binary
+    # Explicit override: user manages their own persistence
+    if [ -n "${AUXLOCLAW_HOME:-}" ]; then
+        mkdir -p "$AUXLOCLAW_HOME"
+        if [ ! -e "$home_auxlo" ]; then
+            ln -sf "$AUXLOCLAW_HOME" "$home_auxlo"
+            log "Data dir: ${AUXLOCLAW_HOME} (AUXLOCLAW_HOME)"
+        elif [ -d "$home_auxlo" ] && [ ! -L "$home_auxlo" ]; then
+            # Migrate existing data into the user-specified location
+            cp -an "$home_auxlo"/. "$AUXLOCLAW_HOME"/ 2>/dev/null || true
+            rm -rf "$home_auxlo"
+            ln -sf "$AUXLOCLAW_HOME" "$home_auxlo"
+            log "Migrated data -> ${AUXLOCLAW_HOME} (AUXLOCLAW_HOME)"
+        fi
+        return
+    fi
+
+    # Already a symlink?  User or a previous run configured it -- leave it.
+    if [ -L "$home_auxlo" ]; then
+        return
+    fi
+
+    local persistent_root
+    persistent_root="$(find_persistent_root)"
+
+    if [ -z "$persistent_root" ]; then
+        # No persistent mount found -- bare metal or simple container.
+        # ~/.auxloclaw is on the root fs which is presumably persistent.
+        mkdir -p "$home_auxlo"
+        return
+    fi
+
+    local data_target="${persistent_root}/.auxloclaw-data"
+
+    if [ -d "$home_auxlo" ] && [ ! -L "$home_auxlo" ]; then
+        # Existing data on ephemeral fs -- migrate to persistent storage
+        mkdir -p "$data_target"
+        # Only copy if target is empty (first migration)
+        if [ -z "$(ls -A "$data_target" 2>/dev/null)" ]; then
+            cp -a "$home_auxlo"/. "$data_target"/ 2>/dev/null || true
+            log "Migrated data: ${home_auxlo} -> ${data_target}"
+        else
+            # Target already has data (previous run) -- merge (don't overwrite)
+            cp -an "$home_auxlo"/. "$data_target"/ 2>/dev/null || true
+            log "Merged data: ${home_auxlo} -> ${data_target}"
+        fi
+        rm -rf "$home_auxlo"
+        ln -sf "$data_target" "$home_auxlo"
+        log "Data dir symlinked: ${home_auxlo} -> ${data_target}"
+    else
+        # Fresh install -- just create the symlink
+        mkdir -p "$data_target"
+        ln -sf "$data_target" "$home_auxlo"
+        log "Data dir: ${home_auxlo} -> ${data_target}"
+    fi
+}
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+ensure_binary
+persist_data_dir
+
 exec "$INSTALL_PATH" "$@"

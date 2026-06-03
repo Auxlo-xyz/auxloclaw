@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-
 set -euo pipefail
+
+# Watchdog for auxloclaw gateway.
+# Runs on a cron (every minute).  Restarts the gateway if it's down.
+# Also handles post-reset recovery: binary reinstall + data dir symlink.
 
 LOCKFILE="/tmp/auxloclaw_watchdog.lock"
 LOGFILE="/tmp/auxloclaw_watchdog.log"
@@ -36,11 +39,9 @@ detect_platform() {
 }
 
 ensure_binary() {
-    if [ -x "$INSTALL_PATH" ]; then
-        return 0
-    fi
+    [ -x "$INSTALL_PATH" ] && return 0
 
-    log "WARN: Binary not found at ${INSTALL_PATH}, reinstalling after container reset..."
+    log "WARN: Binary missing at ${INSTALL_PATH}, reinstalling after container reset"
     local target
     target="$(detect_platform)"
     if [ "$target" = "unsupported-unsupported" ]; then
@@ -70,15 +71,70 @@ ensure_binary() {
     return 0
 }
 
+# ── Data dir recovery (same logic as entrypoint) ─────────────────────────────
+
+find_persistent_root() {
+    if [ -n "${AUXLOCLAW_HOME:-}" ]; then
+        echo ""
+        return
+    fi
+    local root_dev
+    root_dev="$(stat -c %d / 2>/dev/null || echo 0)"
+    local candidates="/home/workspace /data /mnt/data /srv/auxloclaw /persistent"
+    for mount in $candidates; do
+        [ -d "$mount" ] || continue
+        [ -w "$mount" ] || continue
+        local mount_dev
+        mount_dev="$(stat -c %d "$mount" 2>/dev/null || echo 0)"
+        if [ "$mount_dev" != "$root_dev" ]; then
+            echo "$mount"
+            return
+        fi
+    done
+    for mount in /home/workspace; do
+        if [ -d "$mount" ] && [ -w "$mount" ]; then
+            echo "$mount"
+            return
+        fi
+    done
+    echo ""
+}
+
+ensure_data_dir() {
+    local home_auxlo="${HOME}/.auxloclaw"
+
+    if [ -n "${AUXLOCLAW_HOME:-}" ]; then
+        mkdir -p "$AUXLOCLAW_HOME"
+        if [ ! -e "$home_auxlo" ]; then
+            ln -sf "$AUXLOCLAW_HOME" "$home_auxlo"
+        fi
+        return
+    fi
+
+    [ -L "$home_auxlo" ] && return
+
+    local persistent_root
+    persistent_root="$(find_persistent_root)"
+    [ -z "$persistent_root" ] && { mkdir -p "$home_auxlo"; return; }
+
+    local data_target="${persistent_root}/.auxloclaw-data"
+    mkdir -p "$data_target"
+    if [ -d "$home_auxlo" ] && [ ! -L "$home_auxlo" ]; then
+        cp -an "$home_auxlo"/. "$data_target"/ 2>/dev/null || true
+        rm -rf "$home_auxlo"
+    fi
+    ln -sf "$data_target" "$home_auxlo"
+    log "Data dir recovered: ${home_auxlo} -> ${data_target}"
+}
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+ensure_binary
+ensure_data_dir
+
 gateway_up() {
     timeout 12s auxloclaw status 2>/dev/null | grep -q "Gateway:"
 }
-
-# Attempt reinstall if binary is missing (container reset scenario)
-if ! ensure_binary; then
-    log "ERROR: Could not ensure auxloclaw binary exists"
-    exit 1
-fi
 
 if gateway_up; then
   log "OK: gateway already running"
