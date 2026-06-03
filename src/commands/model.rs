@@ -461,18 +461,6 @@ pub fn update_config_provider(
         None => return Ok(()),
     };
 
-    // Need at least a base_url and api_key to write a provider
-    let base_url = match &ov.base_url {
-        Some(u) if !u.is_empty() => u.clone(),
-        _ => return Ok(()),
-    };
-    let api_key = match &ov.encrypted_api_key {
-        Some(enc) => store.decrypt_key(enc)?,
-        None => return Ok(()),
-    };
-    let provider_type = ov.provider_type.clone().unwrap_or_else(|| "openai".into());
-    let model_id = ov.model_id.clone().unwrap_or_else(|| "".into());
-
     let config_path = dirs::home_dir()
         .map(|h| h.join(".auxloclaw/config.toml"))
         .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
@@ -484,6 +472,46 @@ pub fn update_config_provider(
     } else {
         toml::Value::Table(Default::default())
     };
+
+    // Always write model_id to [agent] if set -- this is the cross-channel
+    // persistence the user needs.  Does NOT require provider credentials.
+    if let Some(ref model_id) = ov.model_id {
+        if !model_id.is_empty() {
+            let agent_table = doc.as_table_mut()
+                .unwrap()
+                .entry("agent".to_string())
+                .or_insert_with(|| toml::Value::Table(Default::default()))
+                .as_table_mut()
+                .ok_or_else(|| anyhow::anyhow!("[agent] is not a table"))?;
+            agent_table.insert("default_model".to_string(), toml::Value::String(model_id.clone()));
+        }
+    }
+
+    // Write provider entry only when we have enough data
+    let base_url = match &ov.base_url {
+        Some(u) if !u.is_empty() => u.clone(),
+        _ => {
+            // No base_url -- just write the model and return
+            let rendered = toml::to_string_pretty(&doc)?;
+            std::fs::write(&config_path, &rendered)?;
+            tighten_config_permissions(&config_path);
+            tracing::info!("Updated config.toml with model '{}'", ov.model_id.as_deref().unwrap_or("(none)"));
+            return Ok(());
+        }
+    };
+    let api_key = match &ov.encrypted_api_key {
+        Some(enc) => store.decrypt_key(enc)?,
+        None => {
+            // No api_key -- just write the model and return
+            let rendered = toml::to_string_pretty(&doc)?;
+            std::fs::write(&config_path, &rendered)?;
+            tighten_config_permissions(&config_path);
+            tracing::info!("Updated config.toml with model '{}'", ov.model_id.as_deref().unwrap_or("(none)"));
+            return Ok(());
+        }
+    };
+    let provider_type = ov.provider_type.clone().unwrap_or_else(|| "custom".into());
+    let model_id = ov.model_id.clone().unwrap_or_default();
 
     // Build the provider entry
     let name = provider_type.clone();
@@ -506,29 +534,20 @@ pub fn update_config_provider(
     providers_table.insert("active".to_string(), toml::Value::String(name.clone()));
     providers_table.insert("providers".to_string(), toml::Value::Array(vec![entry]));
 
-    // Update default model in [agent] section
-    if !model_id.is_empty() {
-        let agent_table = doc.as_table_mut()
-            .unwrap()
-            .entry("agent".to_string())
-            .or_insert_with(|| toml::Value::Table(Default::default()))
-            .as_table_mut()
-            .ok_or_else(|| anyhow::anyhow!("[agent] is not a table"))?;
-        agent_table.insert("default_model".to_string(), toml::Value::String(model_id));
-    }
-
     let rendered = toml::to_string_pretty(&doc)?;
     std::fs::write(&config_path, &rendered)?;
+    tighten_config_permissions(&config_path);
 
-    // Tighten permissions (config now contains an API key)
+    tracing::info!("Updated config.toml with provider '{}' and model '{}'", name, model_id);
+    Ok(())
+}
+
+fn tighten_config_permissions(path: &std::path::Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600));
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
     }
-
-    tracing::info!("Updated config.toml with provider '{}'", name);
-    Ok(())
 }
 
 pub fn now_secs() -> u64 {

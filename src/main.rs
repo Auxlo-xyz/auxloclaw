@@ -220,9 +220,18 @@ async fn main() -> anyhow::Result<()> {
                 println!("{}", resp);
             } else {
                 let mut args = Vec::new();
-                if let Some(ref m) = model_id { args.push(m.clone()); }
-                if let Some(ref b) = base { args.push(format!("--base {}", b)); }
-                if let Some(ref k) = key { args.push(format!("--key {}", k)); }
+                if let Some(ref b) = base {
+                    args.push("url".to_string());
+                    args.push(b.clone());
+                }
+                if let Some(ref k) = key {
+                    args.push("key".to_string());
+                    args.push(k.clone());
+                }
+                if let Some(ref m) = model_id {
+                    args.push("id".to_string());
+                    args.push(m.clone());
+                }
                 let resp = commands::model::handle_model(&model_store, channel, user_id, &args.join(" "))?;
                 println!("{}", resp);
             }

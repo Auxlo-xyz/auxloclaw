@@ -105,12 +105,12 @@ pub fn handle_setup_with(
     
     // Provider selection
     let providers = vec![
-        "OpenAI (gpt-4o)",
-        "Anthropic (claude-3.5-sonnet)",
+        "OpenAI",
+        "Anthropic",
         "Google Gemini",
         "OpenRouter (multi-model)",
-        "Groq (llama-3.1)",
-        "NVIDIA (stepfun-ai/step-3.5-flash)",
+        "Groq",
+        "NVIDIA",
         "Custom endpoint",
     ];
     
@@ -119,21 +119,26 @@ pub fn handle_setup_with(
         .items(&providers)
         .interact()?;
     
-    let (provider_name, api_base, model) = match provider_idx {
-        0 => ("openai", "https://api.openai.com/v1".to_string(), "gpt-4o".to_string()),
-        1 => ("anthropic", "https://api.anthropic.com/v1".to_string(), "claude-3-5-sonnet-20241022".to_string()),
-        2 => ("google", "https://generativelanguage.googleapis.com/v1beta/openai".to_string(), "gemini-1.5-flash".to_string()),
-        3 => ("openrouter", "https://openrouter.ai/api/v1".to_string(), "anthropic/claude-3.5-sonnet".to_string()),
-        4 => ("groq", "https://api.groq.com/openai/v1".to_string(), "llama-3.1-70b-versatile".to_string()),
-        5 => ("nvidia", "https://integrate.api.nvidia.com/v1".to_string(), "stepfun-ai/step-3.5-flash".to_string()),
+    let (provider_name, api_base) = match provider_idx {
+        0 => ("openai", "https://api.openai.com/v1".to_string()),
+        1 => ("anthropic", "https://api.anthropic.com/v1".to_string()),
+        2 => ("google", "https://generativelanguage.googleapis.com/v1beta/openai".to_string()),
+        3 => ("openrouter", "https://openrouter.ai/api/v1".to_string()),
+        4 => ("groq", "https://api.groq.com/openai/v1".to_string()),
+        5 => ("nvidia", "https://integrate.api.nvidia.com/v1".to_string()),
         6 => {
             let base: String = Input::with_theme(&ColorfulTheme::default())
                 .with_prompt("API base URL")
                 .interact_text()?;
-            ("custom", base, "custom-model".to_string())
+            ("custom", base)
         },
         _ => bail!("Invalid selection"),
     };
+
+    // Model ID
+    let model: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Model ID (e.g. gpt-4o, claude-3-5-sonnet-20241022, gemini-1.5-flash)")
+        .interact_text()?;
     
     // API Key
     let api_key: String = Input::with_theme(&ColorfulTheme::default())
@@ -306,10 +311,10 @@ fn quick_setup(config_dir: &PathBuf, telegram: bool, discord: bool) -> Result<()
     
     let config = generate_config(
         "AUXLOCLAW",
-        "openai",
-        "https://api.openai.com/v1",
-        "gpt-4o",
-        &std::env::var("OPENAI_API_KEY").or_else(|_| std::env::var("NVIDIA_API_KEY")).unwrap_or_default(),
+        "",
+        "",
+        "",
+        "",
         1.0,
         if telegram { Some("") } else { None },
         if discord { Some("") } else { None },
@@ -324,7 +329,8 @@ fn quick_setup(config_dir: &PathBuf, telegram: bool, discord: bool) -> Result<()
     }
 
     println!("Quick setup complete: {:?}", config_path);
-    println!("  Set your API key: export OPENAI_API_KEY=your-key");
+    println!("  Configure your model: auxloclaw model --provider <name> --key <api_key> <model_id>");
+    println!("  Or from Telegram/Discord: /model");
     println!("  Run: auxloclaw gateway");
     
     Ok(())
@@ -394,12 +400,31 @@ fn generate_config(
     github_token: Option<&str>,
     extra_mcp: &[(String, String, Vec<String>)],
 ) -> String {
-    let mut config = format!(r#"# AUXLOCLAW Configuration
+    let model_line = if model.is_empty() {
+        String::new()
+    } else {
+        format!("default_model = \"{}\"\n", model)
+    };
+
+    let provider_block = if !provider.is_empty() && !api_base.is_empty() {
+        format!(
+            r#"[[providers.providers]]
+name = "{}"
+api_base = "{}"
+api_key = "{}"  # set via auxloclaw token or env var
+"#,
+            provider, api_base, sanitize_api_key(api_key, "AUXLOCLAW_API_KEY")
+        )
+    } else {
+        String::new()
+    };
+
+    let mut config = format!(
+        r#"# AUXLOCLAW Configuration
 
 [agent]
 name = "{}"
-default_model = "{}"
-max_tokens = 8192
+{}max_tokens = 8192
 temperature = {}
 max_tool_iterations = 100
 context_window_tokens = 20000
@@ -409,12 +434,7 @@ timezone = "UTC"
 connection_pool_size = 32
 request_timeout_secs = 120
 
-[[providers.providers]]
-name = "{}"
-api_base = "{}"
-api_key = "{}"  # set via auxloclaw token or env var
-
-[memory]
+{}[memory]
 database_path = "~/.auxloclaw/memory.db"
 hot_cache_size = 1000
 session_max_messages = 100
@@ -452,14 +472,12 @@ cors_enabled = true
 enabled = true
 "#,
         agent_name,
-        model,
+        model_line,
         temperature,
-        provider,
-        api_base,
-        sanitize_api_key(api_key, "AUXLOCLAW_API_KEY"),
-        telegram_token.is_some() && telegram_token.unwrap_or("").trim().is_empty() == false,
+        provider_block,
+        telegram_token.is_some() && !telegram_token.unwrap_or("").trim().is_empty(),
         telegram_token.unwrap_or("").trim(),
-        discord_token.is_some() && discord_token.unwrap_or("").trim().is_empty() == false,
+        discord_token.is_some() && !discord_token.unwrap_or("").trim().is_empty(),
         discord_token.unwrap_or("").trim()
     );
 
@@ -511,20 +529,17 @@ fn non_interactive_setup(
         fs::create_dir_all(config_dir.join("memory"))?;
     }
 
-    let provider = opts.provider.as_deref().unwrap_or("openai");
-    let model = opts.model.as_deref().unwrap_or("gpt-4o");
-    let api_base = if opts.provider.as_deref() == Some("nvidia") {
-        "https://integrate.api.nvidia.com/v1"
-    } else if opts.provider.as_deref() == Some("openai") {
-        "https://api.openai.com/v1"
-    } else if opts.provider.as_deref() == Some("anthropic") {
-        "https://api.anthropic.com/v1"
-    } else if opts.provider.as_deref() == Some("openrouter") {
-        "https://openrouter.ai/api/v1"
-    } else if opts.provider.as_deref() == Some("groq") {
-        "https://api.groq.com/openai/v1"
-    } else {
-        bail!("Unsupported provider: {}", opts.provider.as_deref().unwrap_or("unknown"))
+    let provider = opts.provider.as_deref().unwrap_or("");
+    let model = opts.model.as_deref().unwrap_or("");
+    let api_base = match opts.provider.as_deref() {
+        Some("nvidia") => "https://integrate.api.nvidia.com/v1",
+        Some("openai") => "https://api.openai.com/v1",
+        Some("anthropic") => "https://api.anthropic.com/v1",
+        Some("openrouter") => "https://openrouter.ai/api/v1",
+        Some("groq") => "https://api.groq.com/openai/v1",
+        Some("deepseek") => "https://api.deepseek.com/v1",
+        Some(other) if !other.is_empty() => bail!("Unsupported provider: {}. Use --base to specify a custom API base URL.", other),
+        _ => "",
     };
     let api_key = opts.api_key.as_deref().unwrap_or("");
     let telegram_token = opts.telegram_token.as_deref();
@@ -564,8 +579,12 @@ fn non_interactive_setup(
     }
 
     println!("\nSummary:");
-    println!("  Provider: {}", provider);
-    println!("  Model: {}", model);
+    if !provider.is_empty() {
+        println!("  Provider: {}", provider);
+    }
+    if !model.is_empty() {
+        println!("  Model: {}", model);
+    }
     println!("  Telegram: {}", if enabled_telegram { "enabled" } else { "disabled" });
     println!("  Discord: {}", if enabled_discord { "enabled" } else { "disabled" });
     println!("  GitHub MCP: {}", if enabled_github { "enabled" } else { "disabled" });
