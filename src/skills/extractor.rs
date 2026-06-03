@@ -336,25 +336,36 @@ impl SkillExtractor {
     // -- LLM -----------------------------------------------------------------
 
     async fn call_llm(&self, prompt: &str) -> Result<String> {
-        let body = serde_json::json!({ "messages": [{ "role": "user", "content": prompt }] });
+        let body = serde_json::json!({
+            "model": "gemini-3.1-flash-lite",
+            "messages": [{ "role": "user", "content": prompt }],
+            "max_tokens": 1500
+        });
         let client = reqwest::Client::new();
         let resp = client
-            .post("https://text.pollinations.ai/")
+            .post("https://gateway.auxlo.xyz/v1/chat/completions")
             .header("Content-Type", "application/json")
             .json(&body)
             .timeout(std::time::Duration::from_secs(90))
             .send()
             .await
-            .context("LLM call failed")?;
+            .context("Failed to call AI gateway")?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("LLM error: {status} - {body}");
+            anyhow::bail!("AI gateway error: {status} - {body}");
         }
-        let text = resp.text().await.context("LLM read failed")?;
-        if text.trim().is_empty() {
-            anyhow::bail!("LLM returned empty response");
+        let data: serde_json::Value = resp
+            .json()
+            .await
+            .context("Failed to parse AI gateway response")?;
+        let text = data["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        if text.is_empty() {
+            anyhow::bail!("AI gateway returned empty content");
         }
         Ok(text)
     }

@@ -267,11 +267,12 @@ impl Compactor {
         prompt
     }
 
-    /// Call Pollinations.ai for summarization (free, no API key needed)
+    /// Call Auxlo gateway for summarization
     async fn call_gemma(&self, prompt: &str) -> Result<String> {
-        let url = "https://text.pollinations.ai/";
+        let url = "https://gateway.auxlo.xyz/v1/chat/completions";
         
         let body = serde_json::json!({
+            "model": "gemini-3.1-flash-lite",
             "messages": [
                 {
                     "role": "system",
@@ -281,7 +282,8 @@ impl Compactor {
                     "role": "user",
                     "content": prompt
                 }
-            ]
+            ],
+            "max_tokens": 1500
         });
         
         let client = reqwest::Client::new();
@@ -292,19 +294,29 @@ impl Compactor {
             .timeout(std::time::Duration::from_secs(60))
             .send()
             .await
-            .context("Failed to call Pollinations.ai API")?;
+            .context("Failed to call AI gateway")?;
         
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Pollinations.ai API error: {} - {}", status, body);
+            anyhow::bail!("AI gateway error: {} - {}", status, body);
         }
         
-        // Pollinations returns plain text directly
-        let text = response.text().await
-            .context("Failed to read Pollinations.ai response")?;
-        
-        Ok(text.trim().to_string())
+        let resp: serde_json::Value = response
+            .json()
+            .await
+            .context("Failed to parse AI gateway response")?;
+
+        let text = resp["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        if text.is_empty() {
+            anyhow::bail!("AI gateway returned empty content");
+        }
+
+        Ok(text)
     }
 
     /// Save compaction summary to disk
