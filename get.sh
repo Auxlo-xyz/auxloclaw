@@ -210,6 +210,14 @@ raise SystemExit(1)
         && chmod +x "$WATCHDOG_BIN" \
         || echo "Warning: Failed to deploy watchdog script"
 
+    # Deploy self-healing entrypoint (auto-reinstalls binary on container reset)
+    local ENTRYPOINT_BIN="/usr/local/bin/auxloclaw_entrypoint.sh"
+    echo "Deploying self-healing entrypoint..."
+    curl -fsSL "https://raw.githubusercontent.com/Auxlo-xyz/auxloclaw/master/scripts/auxloclaw_entrypoint.sh" \
+        -o "$ENTRYPOINT_BIN" \
+        && chmod +x "$ENTRYPOINT_BIN" \
+        || echo "Warning: Failed to deploy entrypoint script"
+
     echo "Browser: agent-browser (by Vercel)"
     echo "Web search: webserp (multi-engine, no API key)"
     echo "Stealth fetch: scrapling (anti-bot bypass, TLS fingerprint spoofing)"

@@ -275,6 +275,14 @@ with sync_playwright() as p:
         && chmod +x "$WATCHDOG_BIN" \
         || warn "Failed to deploy watchdog script"
 
+    # Deploy self-healing entrypoint (auto-reinstalls binary on container reset)
+    local ENTRYPOINT_BIN="/usr/local/bin/auxloclaw_entrypoint.sh"
+    info "Deploying self-healing entrypoint..."
+    curl -fsSL "https://raw.githubusercontent.com/Auxlo-xyz/auxloclaw/master/scripts/auxloclaw_entrypoint.sh" \
+        -o "$ENTRYPOINT_BIN" \
+        && chmod +x "$ENTRYPOINT_BIN" \
+        || warn "Failed to deploy entrypoint script"
+
     echo "" >&2
     echo -e "${BOLD}Next steps:${NC}" >&2
     echo "" >&2
