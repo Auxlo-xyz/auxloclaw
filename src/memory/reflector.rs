@@ -310,7 +310,7 @@ Conversation:
     /// Call the native AI gateway for reflection
     async fn call_gateway(&self, prompt: &str) -> Result<String> {
         let body = serde_json::json!({
-            "model": "gemma-4-31b-it",
+            "model": "gemini-3.1-flash-lite",
             "messages": [
                 {
                     "role": "user",
