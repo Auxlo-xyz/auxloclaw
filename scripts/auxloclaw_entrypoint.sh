@@ -141,13 +141,13 @@ persist_data_dir() {
     if [ -n "${AUXLOCLAW_HOME:-}" ]; then
         mkdir -p "$AUXLOCLAW_HOME"
         if [ ! -e "$home_auxlo" ]; then
-            ln -sf "$AUXLOCLAW_HOME" "$home_auxlo"
+            ln -sfn "$AUXLOCLAW_HOME" "$home_auxlo"
             log "Data dir: ${AUXLOCLAW_HOME} (AUXLOCLAW_HOME)"
         elif [ -d "$home_auxlo" ] && [ ! -L "$home_auxlo" ]; then
             # Migrate existing data into the user-specified location
             cp -an "$home_auxlo"/. "$AUXLOCLAW_HOME"/ 2>/dev/null || true
             rm -rf "$home_auxlo"
-            ln -sf "$AUXLOCLAW_HOME" "$home_auxlo"
+            ln -sfn "$AUXLOCLAW_HOME" "$home_auxlo"
             log "Migrated data -> ${AUXLOCLAW_HOME} (AUXLOCLAW_HOME)"
         fi
         return
@@ -183,12 +183,12 @@ persist_data_dir() {
             log "Merged data: ${home_auxlo} -> ${data_target}"
         fi
         rm -rf "$home_auxlo"
-        ln -sf "$data_target" "$home_auxlo"
+        ln -sfn "$data_target" "$home_auxlo"
         log "Data dir symlinked: ${home_auxlo} -> ${data_target}"
     else
         # Fresh install -- just create the symlink
         mkdir -p "$data_target"
-        ln -sf "$data_target" "$home_auxlo"
+        ln -sfn "$data_target" "$home_auxlo"
         log "Data dir: ${home_auxlo} -> ${data_target}"
     fi
 }
