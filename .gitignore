@@ -1,53 +1,7 @@
-# AGENTS.md - Internal agent context, NEVER push
-AGENTS.md
-
-# Sensitive files
-*.pem
-*.key
-secrets.*
 .env
-.env.*
-!.env.example
-
-# Config with API keys
-config.toml
-auxloclaw.toml
-!.auxloclaw/config.toml
-
-# User data
-~/.auxloclaw/
-*.db
-*.sqlite
-*.sqlite3
-
-# Build artifacts
-/target/
-**/*.rs.bk
-*.pdb
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-/dev/shm/*.log
-
-# Temporary files
-/tmp/
-*.tmp
-*.temp
-
-# Test artifacts
-/coverage/
-.nyc_output/notepad-app/*
-notepad-app/
-notepad/
-.cargo/
+.env.local
+.env.production
+__pycache__/
+*.pyc
+.venv/
+venv/
